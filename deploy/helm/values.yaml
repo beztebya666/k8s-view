@@ -1,0 +1,70 @@
+image:
+  repository: ghcr.io/k8s-view/k8s-view
+  tag: "0.3.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+revisionHistoryLimit: 3
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: k8s-view.example.com
+      paths: ["/"]
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Run with the pod's ServiceAccount and the bundled cluster-admin ClusterRole.
+# Override `rbac.rules` if you want to limit what the UI can do.
+rbac:
+  create: true
+  rules:
+    - apiGroups: ["*"]
+      resources: ["*"]
+      verbs: ["*"]
+    - nonResourceURLs: ["*"]
+      verbs: ["*"]
+
+serviceAccount:
+  create: true
+  name: ""
+
+env: []
+extraArgs: []
+
+# Optional HTTP basic-auth in front of the UI.
+basicAuth:
+  enabled: false
+  user: ""
+  password: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

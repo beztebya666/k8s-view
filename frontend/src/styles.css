@@ -1,0 +1,306 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: 11 13 16;          /* near-black */
+    --bg-soft: 18 20 25;
+    --bg-mute: 25 27 33;
+    --fg: 230 230 230;
+    --fg-soft: 170 170 170;
+    --fg-mute: 110 110 110;
+    --line: 38 41 48;
+    --accent: 96 165 250;    /* sky-400 */
+    --accent-soft: 30 58 138;
+    --ok: 34 197 94;         /* green-500 */
+    --warn: 234 179 8;       /* yellow-500 */
+    --bad: 239 68 68;        /* red-500 */
+    --info: 56 189 248;      /* sky-400 */
+  }
+
+  html.light {
+    --bg: 250 250 252;
+    --bg-soft: 244 244 247;
+    --bg-mute: 232 232 238;
+    --fg: 22 24 28;
+    --fg-soft: 80 82 90;
+    --fg-mute: 130 130 138;
+    --line: 220 220 226;
+    --accent: 37 99 235;
+    --accent-soft: 191 219 254;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  ::selection { background: rgb(var(--accent) / 0.35); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--bg-mute)); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgb(var(--line)); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  /* Smooth subpixel font rendering */
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center gap-1.5 px-2.5 h-7 text-xs rounded-md
+           border border-line bg-bg-soft hover:bg-bg-mute
+           text-fg transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn border-accent/40 bg-accent/10 hover:bg-accent/20 text-accent;
+  }
+  .btn-bad {
+    @apply btn border-bad/30 bg-bad/10 hover:bg-bad/20 text-bad;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 px-1.5 h-5 rounded text-[10px]
+           uppercase tracking-wide font-medium border border-line bg-bg-soft text-fg-soft;
+  }
+  .chip-ok   { @apply chip border-ok/40   bg-ok/10   text-ok; }
+  .chip-warn { @apply chip border-warn/40 bg-warn/10 text-warn; }
+  .chip-bad  { @apply chip border-bad/40  bg-bad/10  text-bad; }
+  .chip-info { @apply chip border-info/40 bg-info/10 text-info; }
+
+  .kv-issue {
+    @apply relative inline-flex h-4 w-4 items-center justify-center rounded
+           outline-none cursor-help transition-colors;
+  }
+  .kv-issue:focus-visible {
+    box-shadow: 0 0 0 2px rgb(var(--accent) / 0.32);
+  }
+  .kv-issue-warn { @apply text-warn hover:text-warn hover:bg-warn/10; }
+  .kv-issue-bad  { @apply text-bad  hover:text-bad  hover:bg-bad/10;  }
+  .kv-tooltip {
+    position: fixed;
+    z-index: 1200;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: min(320px, 70vw);
+    border: 1px solid rgb(var(--line));
+    border-radius: 6px;
+    background: rgb(var(--bg-soft) / 0.98);
+    color: rgb(var(--fg-soft));
+    box-shadow: 0 12px 28px rgb(0 0 0 / 0.45);
+    padding: 6px 8px;
+    text-align: left;
+    text-transform: none;
+    letter-spacing: 0;
+    pointer-events: none;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .kv-tooltip-title {
+    @apply mb-0.5 block text-[11px] font-semibold uppercase tracking-wide text-fg;
+  }
+  .kv-tooltip-count {
+    @apply ml-1 text-fg-mute font-normal normal-case tracking-normal;
+  }
+  .kv-tooltip-line {
+    @apply block text-xs leading-snug whitespace-normal text-fg-soft;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .kv-tooltip-line + .kv-tooltip-line {
+    @apply mt-0.5;
+  }
+  .kv-tooltip-more {
+    @apply text-fg-mute;
+  }
+
+  .input {
+    @apply h-8 px-2.5 rounded-md bg-bg-soft border border-line text-fg
+           outline-none focus:border-accent placeholder:text-fg-mute text-sm;
+  }
+  .kv-checkbox {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    display: inline-grid;
+    place-content: center;
+    border-radius: 3px;
+    border: 1px solid rgb(var(--fg-mute) / 0.72);
+    background: rgb(var(--bg-soft));
+    color: rgb(var(--bg));
+    cursor: pointer;
+    transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+  }
+  .kv-checkbox:hover {
+    border-color: rgb(var(--accent));
+    box-shadow: 0 0 0 2px rgb(var(--accent) / 0.12);
+  }
+  .kv-checkbox:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px rgb(var(--accent) / 0.28);
+  }
+  .kv-checkbox:checked,
+  .kv-checkbox:indeterminate {
+    border-color: rgb(var(--accent));
+    background: rgb(var(--accent));
+  }
+  .kv-checkbox:checked::before {
+    content: "";
+    width: 8px;
+    height: 5px;
+    border-left: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: translateY(-1px) rotate(-45deg);
+  }
+  .kv-checkbox:indeterminate::before {
+    content: "";
+    width: 8px;
+    height: 2px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+  .kv-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    box-shadow: none;
+  }
+  .row-hover { @apply hover:bg-accent/5; }
+
+  /* Detail-panel slide-in. Lens-style: a brief slide from the right plus
+     a tiny opacity ramp so the panel doesn't snap when the user clicks a
+     row. Honour prefers-reduced-motion. */
+  @keyframes detail-panel-in {
+    from { transform: translateX(8px); opacity: 0.0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
+  .detail-panel-in {
+    animation: detail-panel-in 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @keyframes toast-in {
+    from { transform: translateX(12px); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+  }
+  .toast-in {
+    animation: toast-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .detail-panel-in,
+    .toast-in { animation: none; }
+  }
+  .sidebar-resizer {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 7px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 40;
+  }
+  .sidebar-resizer::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+  }
+  .sidebar-resizer:hover::after,
+  .sidebar-resizer:active::after {
+    background: rgb(var(--accent));
+    box-shadow: 0 0 0 1px rgb(var(--accent) / 0.25);
+  }
+  .table-grid {
+    display: grid; align-items: center;
+    grid-template-columns: var(--cols);
+  }
+  .col-cell {
+    @apply px-3 py-1.5 text-sm truncate min-w-0;
+  }
+  .col-head {
+    @apply relative px-3 py-1.5 text-[11px] uppercase tracking-wide text-fg-mute font-medium select-none cursor-pointer
+           hover:text-fg hover:bg-bg-mute transition-colors;
+  }
+  .col-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -4px;
+    width: 8px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 20;
+  }
+  .col-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 20%;
+    bottom: 20%;
+    left: 3px;
+    width: 1px;
+    background: transparent;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+  }
+  .col-resize-handle:hover::after,
+  .col-resize-handle:active::after {
+    background: rgb(var(--accent));
+    box-shadow: 0 0 0 1px rgb(var(--accent) / 0.2);
+  }
+
+  .top-tabs-scroll::-webkit-scrollbar { height: 0; }
+  .top-tabs-scroll { scrollbar-width: none; }
+
+  /* WheelColumn — chrome-less scroll. Visible scrollbars would compete with
+     the centre selection guides and never line up across two adjacent
+     wheels. The selection state is conveyed by the centre band, not by
+     scroll position. */
+  .wheel-column-scroll::-webkit-scrollbar { width: 0; height: 0; }
+  .wheel-column-scroll { scrollbar-width: none; }
+
+  /* In-line search highlight inside the log viewer (LogRow.tsx). The viewer
+     renders on a hard-black background regardless of theme, so the
+     highlight colours are tuned to that background instead of the global
+     accent / bg tokens. */
+  .log-hit {
+    background: rgba(250, 204, 21, 0.28);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+  .log-hit-active {
+    background: rgba(250, 204, 21, 0.85);
+    color: #111;
+    box-shadow: 0 0 0 1px rgba(250, 204, 21, 1);
+  }
+
+  /* Lens-style flat slider used in modal prompts (e.g. Scale dialog). */
+  .modal-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 2px;
+    background: rgb(var(--bg-mute));
+    outline: none;
+    cursor: pointer;
+  }
+  .modal-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: rgb(var(--accent));
+    box-shadow: 0 0 0 2px rgb(var(--bg-soft));
+    cursor: grab;
+    transition: transform 0.08s ease;
+  }
+  .modal-slider::-webkit-slider-thumb:active { transform: scale(1.15); cursor: grabbing; }
+  .modal-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border: none;
+    border-radius: 50%;
+    background: rgb(var(--accent));
+    box-shadow: 0 0 0 2px rgb(var(--bg-soft));
+    cursor: grab;
+  }
+}

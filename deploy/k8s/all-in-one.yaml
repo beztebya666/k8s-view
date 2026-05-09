@@ -1,0 +1,71 @@
+# Plain `kubectl apply -f all-in-one.yaml` install. Equivalent to the Helm
+# chart with default values. Convenient for "just give me the dashboard".
+
+apiVersion: v1
+kind: Namespace
+metadata: { name: k8s-view }
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: k8s-view, namespace: k8s-view }
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: k8s-view }
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+  - nonResourceURLs: ["*"]
+    verbs: ["*"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: k8s-view }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: k8s-view }
+subjects:
+  - kind: ServiceAccount
+    name: k8s-view
+    namespace: k8s-view
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: k8s-view, namespace: k8s-view }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: k8s-view } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: k8s-view } }
+    spec:
+      serviceAccountName: k8s-view
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: k8s-view
+          image: ghcr.io/k8s-view/k8s-view:0.3.0
+          args: ["--in-cluster", "--listen=:8080"]
+          ports: [{ containerPort: 8080, name: http }]
+          readinessProbe: { httpGet: { path: /api/v1/healthz, port: http } }
+          livenessProbe:  { httpGet: { path: /api/v1/healthz, port: http } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: 1000m, memory: 1Gi }
+
+---
+apiVersion: v1
+kind: Service
+metadata: { name: k8s-view, namespace: k8s-view }
+spec:
+  selector: { app.kubernetes.io/name: k8s-view }
+  ports: [{ port: 80, targetPort: http, name: http }]

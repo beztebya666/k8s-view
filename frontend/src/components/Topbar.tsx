@@ -1,0 +1,324 @@
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileUp, Trash2 } from "lucide-react";
+import clsx from "clsx";
+import { api, ClusterInfo } from "../lib/api";
+import { useApp } from "../stores/app";
+import { getClusterStream } from "../lib/stream";
+import { AddClusterModal } from "./AddClusterModal";
+import { modals } from "./Modals";
+import { notify_ } from "../lib/notifications";
+import { clusterColor } from "../lib/clusterColor";
+import { useBottomPane } from "./BottomPane";
+import { useDismiss } from "../lib/useDismiss";
+
+type Menu = "cluster" | "ns" | null;
+
+export function Topbar() {
+  const cluster = useApp((s) => s.cluster);
+  const namespace = useApp((s) => s.namespace);
+  const namespaces = useApp((s) => s.namespaces);
+  const setNamespaces = useApp((s) => s.setNamespaces);
+  const search = useApp((s) => s.search);
+  const setSearch = useApp((s) => s.setSearch);
+  const theme = useApp((s) => s.theme);
+  const setTheme = useApp((s) => s.setTheme);
+  const settings = useApp((s) => s.getClusterSettings(cluster));
+  const navigate = useNavigate();
+  const { cluster: routeCluster } = useParams();
+
+  // Single source of truth for which menu is open — opening one auto-closes
+  // the other, so users never see two pickers stacked simultaneously.
+  const [openMenu, setOpenMenu] = useState<Menu>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const bottom = useBottomPane();
+  const curTint = clusterColor(cluster);
+
+  const { data: clusters } = useQuery({ queryKey: ["clusters"], queryFn: api.clusters });
+  const { data: namespaceList } = useQuery({
+    enabled: !!cluster,
+    queryKey: ["namespaces", cluster],
+    queryFn: () => api.namespaces(cluster),
+    staleTime: 60_000,
+  });
+  const selectedNamespaces = namespaces.length > 0 ? namespaces : (namespace ? [namespace] : []);
+
+  const [connected, setConnected] = useState(false);
+  useEffect(() => {
+    if (!cluster) return;
+    const s = getClusterStream(cluster);
+    return s.onConnectionChange(setConnected);
+  }, [cluster]);
+
+  return (
+    <div className="h-11 flex items-center gap-3 px-3 bg-bg-soft">
+      <ClusterPicker
+        clusters={clusters ?? []}
+        current={cluster}
+        open={openMenu === "cluster"}
+        onOpen={(o) => setOpenMenu(o ? "cluster" : null)}
+        onSelect={(name) => {
+          const target = `/${encodeURIComponent(name)}/${decodeURIComponent(window.location.pathname.split("/").slice(2).join("/")) || "overview"}`;
+          api.selectCluster(name).catch(() => {});
+          navigate(target);
+        }}
+        onAdd={() => {
+          setOpenMenu(null);
+          setAddOpen(true);
+        }}
+        onRemove={async (name) => {
+          const ok = await modals.confirm({
+            title: `Remove cluster ${name}?`,
+            body: "This unregisters the cluster from k8s-view and removes its kubeconfig from this device. The cluster itself is untouched.",
+            danger: true,
+            okLabel: "Remove",
+          });
+          if (!ok) return;
+          try {
+            await api.removeCluster(name);
+            await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+            notify_.ok(`Removed ${name}`);
+            // If the user was viewing the cluster they just removed,
+            // bounce them to whatever cluster is now current.
+            if (cluster === name) {
+              navigate("/");
+            }
+          } catch (e: any) {
+            notify_.bad("Remove failed", e?.message ?? String(e));
+          }
+        }}
+      />
+
+      <NamespacePicker
+        value={selectedNamespaces}
+        namespaces={mergeNamespaces(namespaceList ?? [], settings.accessibleNamespaces)}
+        open={openMenu === "ns"}
+        onOpen={(o) => setOpenMenu(o ? "ns" : null)}
+        onChange={setNamespaces}
+      />
+
+      <div className="flex-1" />
+
+      <div className="relative">
+        <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-mute" />
+        <input
+          className="input pl-7 w-[280px]"
+          placeholder="Global search..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+
+      <div className={clsx(
+        "flex items-center gap-1.5 px-2 h-7 rounded-md text-[11px]",
+        connected ? "text-ok bg-ok/10" : "text-bad bg-bad/10",
+      )}>
+        {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
+        {connected ? "live" : "offline"}
+      </div>
+
+      <button
+        className="btn"
+        onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+        title="Toggle theme"
+      >
+        {theme === "light" ? <Moon size={13} /> : <Sun size={13} />}
+      </button>
+
+      <button
+        className="btn"
+        onClick={() => navigate(`/${encodeURIComponent(routeCluster ?? cluster)}/settings/general`)}
+        title="Cluster settings"
+      >
+        <Settings size={13} />
+      </button>
+
+      <button
+        className="btn"
+        onClick={() => {
+          const target = routeCluster ?? cluster;
+          if (target) bottom.push({ action: "create", cluster: target });
+        }}
+        title={`Create resource in ${routeCluster ?? cluster}`}
+        style={{
+          borderColor: curTint.bg,
+          background: curTint.bg,
+          color: curTint.hsl,
+        }}
+      >
+        <FilePen size={13} style={{ color: curTint.hsl }} /> Create
+      </button>
+
+      {addOpen && (
+        <AddClusterModal
+          onClose={() => setAddOpen(false)}
+          onImported={async (names) => {
+            setAddOpen(false);
+            await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+            const first = names[0];
+            if (first) {
+              api.selectCluster(first).catch(() => {});
+              navigate(`/${encodeURIComponent(first)}/overview`);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function mergeNamespaces(apiNamespaces: string[], manualNamespaces: string[]) {
+  return [...new Set([...apiNamespaces, ...manualNamespaces])].sort();
+}
+
+function ClusterPicker({
+  clusters, current, onSelect, open, onOpen, onAdd, onRemove,
+}: {
+  clusters: ClusterInfo[]; current: string; onSelect: (n: string) => void;
+  open: boolean; onOpen: (o: boolean) => void;
+  onAdd: () => void;
+  onRemove: (n: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useDismiss(ref, open, () => onOpen(false));
+  const cur = clusters.find((c) => c.name === current);
+  const curTint = clusterColor(current || "");
+  return (
+    <div className="relative" ref={ref}>
+      <button className="btn" onClick={() => onOpen(!open)}>
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{
+            background: cur?.connected ? curTint.hsl : "transparent",
+            border: cur?.connected ? "none" : `1px solid ${curTint.hsl}`,
+          }}
+        />
+        <span className="font-medium truncate max-w-[180px]">{current || "no cluster"}</span>
+        <ChevronDown size={12} className={clsx("transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-9 z-30 w-[300px] bg-bg-soft border border-line rounded-md shadow-xl py-1">
+          <div className="max-h-[60vh] overflow-y-auto">
+            {clusters.length === 0 && (
+              <div className="px-3 py-2 text-xs text-fg-mute">No clusters configured</div>
+            )}
+            {clusters.map((c) => {
+              const tint = clusterColor(c.name);
+              return (
+                <div
+                  key={c.name}
+                  className={clsx(
+                    "group w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-bg-mute",
+                    c.name === current && "bg-bg-mute",
+                  )}
+                >
+                  <button
+                    type="button"
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                    onClick={() => { onSelect(c.name); onOpen(false); }}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{
+                        background: c.connected ? tint.hsl : "transparent",
+                        border: c.connected ? "none" : `1px solid ${tint.hsl}`,
+                      }}
+                    />
+                    <span className="flex-1 text-left truncate">{c.name}</span>
+                    <span className="text-fg-mute text-[10px]">{c.version || "—"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="shrink-0 h-6 w-6 grid place-items-center rounded text-fg-mute opacity-0 group-hover:opacity-100 hover:text-bad hover:bg-bad/10"
+                    title={`Remove cluster ${c.name}`}
+                    aria-label={`Remove cluster ${c.name}`}
+                    onClick={(e) => { e.stopPropagation(); onRemove(c.name); }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-1 pt-1 border-t border-line">
+            <button
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-accent hover:bg-bg-mute"
+              onClick={onAdd}
+            >
+              <FileUp size={13} />
+              <span>Add cluster from kubeconfig…</span>
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NamespacePicker({
+  value, namespaces, onChange, open, onOpen,
+}: {
+  value: string[]; namespaces: string[]; onChange: (v: string[]) => void;
+  open: boolean; onOpen: (o: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [filter, setFilter] = useState("");
+  useDismiss(ref, open, () => onOpen(false));
+  useEffect(() => { if (!open) setFilter(""); }, [open]);
+  const selected = new Set(value);
+  const filterLower = filter.toLowerCase();
+  const visible = namespaces.filter((n) => n.toLowerCase().includes(filterLower));
+  const label = value.length === 0 ? "all" : value.length === 1 ? value[0] : `${value.length} selected`;
+  const toggle = (namespace: string) => {
+    const next = new Set(value);
+    if (next.has(namespace)) next.delete(namespace);
+    else next.add(namespace);
+    onChange([...next].sort());
+  };
+  return (
+    <div className="relative" ref={ref}>
+      <button className="btn" onClick={() => onOpen(!open)}>
+        ns: <span className="font-medium max-w-[150px] truncate">{label}</span>
+        <ChevronDown size={12} className={clsx("transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-9 z-30 w-[300px] bg-bg-soft border border-line rounded-md shadow-xl py-1">
+          <input
+            autoFocus
+            className="input w-[calc(100%-12px)] mx-1.5 mb-1"
+            placeholder="filter…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <button
+            className={clsx("w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-bg-mute",
+              value.length === 0 && "bg-bg-mute text-accent")}
+            onClick={() => onChange([])}
+          >
+            <input className="kv-checkbox" type="checkbox" checked={value.length === 0} readOnly tabIndex={-1} />
+            <span className="text-left">All namespaces</span>
+          </button>
+          <div className="max-h-[280px] overflow-y-auto">
+            {visible.map((n) => (
+              <button
+                key={n}
+                className={clsx("w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-bg-mute",
+                  selected.has(n) && "bg-bg-mute text-accent")}
+                onClick={() => toggle(n)}
+              >
+                <input className="kv-checkbox" type="checkbox" checked={selected.has(n)} readOnly tabIndex={-1} />
+                <span className="min-w-0 flex-1 text-left truncate">{n}</span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-1 border-t border-line px-2 pt-2 pb-1 flex items-center gap-2">
+            <button className="btn h-7 flex-1 justify-center" onClick={() => onChange([])}>Reset</button>
+            <button className="btn-primary h-7 flex-1 justify-center" onClick={() => onOpen(false)}>Done</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

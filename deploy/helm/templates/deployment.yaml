@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "k8s-view.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels: {{- include "k8s-view.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "k8s-view.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "k8s-view.serviceAccountName" . }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: k8s-view
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --in-cluster
+            - --listen=:8080
+            {{- if .Values.basicAuth.enabled }}
+            - --basic-auth-user={{ .Values.basicAuth.user }}
+            - --basic-auth-pass={{ .Values.basicAuth.password }}
+            {{- end }}
+            {{- range .Values.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          env:
+            {{- range .Values.env }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet: { path: /api/v1/healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/v1/healthz, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+      nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
+      affinity: {{- toYaml .Values.affinity | nindent 8 }}
+      tolerations: {{- toYaml .Values.tolerations | nindent 8 }}

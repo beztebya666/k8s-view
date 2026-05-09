@@ -1,0 +1,22 @@
+bin/
+*.test
+*.out
+*.log
+node_modules/
+frontend/dist/
+internal/web/dist/*
+!internal/web/dist/.gitkeep
+.DS_Store
+.idea/
+.vscode/
+.env
+
+# Local release artefacts (tar bundles, checksums) live under dist/ at the
+# repo root. They're produced by `make` / `save-k8s-view-image.sh` and don't
+# belong in source control.
+/dist/
+
+# Editor / IDE / harness scratch.
+.codex/
+.claude/
+memory/

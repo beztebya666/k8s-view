@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b0d10" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>k8s-view</title>
+    <style>
+      html,body,#root{height:100%}
+      body{
+        background:#0b0d10;color:#e6e6e6;
+        font-family:InterVariable,Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+        overflow:hidden;
+      }
+      .boot{
+        display:flex;align-items:center;justify-content:center;height:100%;
+        flex-direction:column;gap:14px;
+      }
+      .boot .logo{font-weight:300;font-size:34px;letter-spacing:-0.02em}
+      .boot .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;
+        box-shadow:0 0 16px #22c55e;animation:pulse 1.2s infinite}
+      @keyframes pulse{0%{opacity:.4}50%{opacity:1}100%{opacity:.4}}
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot">
+        <div class="dot"></div>
+        <div class="logo">k8s-view</div>
+        <div style="opacity:.5;font-size:13px">connecting…</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

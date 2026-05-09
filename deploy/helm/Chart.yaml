@@ -1,0 +1,16 @@
+apiVersion: v2
+name: k8s-view
+description: The fastest, prettiest Kubernetes UI.
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+home: https://github.com/k8s-view/k8s-view
+sources:
+  - https://github.com/k8s-view/k8s-view
+keywords:
+  - kubernetes
+  - dashboard
+  - ui
+  - observability
+maintainers:
+  - name: k8s-view authors

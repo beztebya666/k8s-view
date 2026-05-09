@@ -1,0 +1,8 @@
+bin/
+internal/web/dist/*
+!internal/web/dist/.gitkeep
+frontend/node_modules/
+frontend/dist/
+.git/
+*.md
+deploy/
