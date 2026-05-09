@@ -2,6 +2,8 @@
 
 **A streaming, multi-cluster Kubernetes dashboard. Single binary. Apache-2.0.**
 
+![k8s-view dashboard — pods list, topology graph, related ReplicaSets, live container logs](docs/screenshots/dashboard.png)
+
 `k8s-view` is a self-hosted Kubernetes UI built on a strict streaming model:
 every resource list in the browser is fed by a `client-go` shared informer on
 the backend and pushed to the frontend as binary MessagePack deltas over a
