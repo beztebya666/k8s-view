@@ -184,7 +184,8 @@ func (h *handlers) disconnectCluster(w http.ResponseWriter, r *http.Request) {
 }
 
 // connectCluster is the inverse of disconnect — flips the cluster back to
-// active. Idempotent. The next Subscribe rebuilds informers on demand.
+// active and synchronously probes connectivity so the response carries an
+// up-to-date Connected/Version pair. Idempotent.
 func (h *handlers) connectCluster(w http.ResponseWriter, r *http.Request) {
 	mgr, err := h.managerFor(r)
 	if err != nil {
@@ -192,7 +193,7 @@ func (h *handlers) connectCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := chi.URLParam(r, "name")
-	if err := mgr.Connect(name); err != nil {
+	if err := mgr.Connect(r.Context(), name); err != nil {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}

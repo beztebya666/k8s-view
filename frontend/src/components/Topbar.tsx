@@ -339,11 +339,11 @@ function ClusterRow({
         onClick={onSelect}
       >
         <span className="w-2 h-2 rounded-full shrink-0" style={dotStyle} />
-        <span className={clsx("flex-1 text-left truncate", info.paused && "text-fg-mute italic")}>
+        <span className={clsx("flex-1 text-left truncate", info.paused && "text-fg-mute")}>
           {info.name}
         </span>
         {info.paused
-          ? <span className="text-warn text-[9px] uppercase tracking-wider font-medium">paused</span>
+          ? <span className="text-warn text-[9px] uppercase tracking-wider font-medium">disconnected</span>
           : <span className="text-fg-mute text-[10px]">{info.version || "—"}</span>}
       </button>
       {info.paused ? (

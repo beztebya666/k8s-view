@@ -52,6 +52,13 @@ type Cluster struct {
 	// touching this cluster" toggle that's reversible without re-import.
 	paused atomic.Bool
 
+	// Probe bookkeeping shared between the periodic loop and Resume's
+	// kick-once call. probeMu guards probeChecked + probeLastErr; the
+	// `connected` and `version` atoms above keep their own guarantees.
+	probeMu      sync.Mutex
+	probeChecked bool
+	probeLastErr string
+
 	mu sync.Mutex
 }
 
@@ -108,53 +115,55 @@ func newCluster(parent context.Context, name string, rc *rest.Config, logger *za
 func (c *Cluster) probe() {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
-	checked := false
-	lastErr := ""
-	check := func() {
-		// Skip the probe entirely while paused — we owe the user "no
-		// background touching" once they hit Disconnect, and a 15 s ping
-		// loop violates the contract just as visibly as an open informer.
-		if c.paused.Load() {
-			return
-		}
-		ctx, cancel := context.WithTimeout(c.rootCtx, 5*time.Second)
-		defer cancel()
-		v := &apiversion.Info{}
-		data, err := c.clientset.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(ctx)
-		if err == nil {
-			err = json.Unmarshal(data, v)
-		}
-		if err != nil {
-			errText := err.Error()
-			if !checked || c.connected.Load() || errText != lastErr {
-				c.logger.Warn("cluster connectivity check failed",
-					zap.String("server", c.restCfg.Host),
-					zap.Error(err))
-			}
-			checked = true
-			lastErr = errText
-			c.connected.Store(false)
-			return
-		}
-		if !checked || !c.connected.Load() {
-			c.logger.Info("cluster connected",
-				zap.String("server", c.restCfg.Host),
-				zap.String("version", v.GitVersion))
-		}
-		checked = true
-		lastErr = ""
-		c.connected.Store(true)
-		c.version.Store(v.GitVersion)
-	}
-	check()
+	c.checkConnectivity(c.rootCtx)
 	for {
 		select {
 		case <-c.rootCtx.Done():
 			return
 		case <-t.C:
-			check()
+			c.checkConnectivity(c.rootCtx)
 		}
 	}
+}
+
+// checkConnectivity hits /version once and updates the connected/version
+// atoms. Used by the background probe loop and by Resume() so a reconnect
+// flips the "live" dot back inside the same HTTP turnaround instead of
+// after the next 15 s tick. Idempotent and safe to call concurrently.
+func (c *Cluster) checkConnectivity(parent context.Context) {
+	if c.paused.Load() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	v := &apiversion.Info{}
+	data, err := c.clientset.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(ctx)
+	if err == nil {
+		err = json.Unmarshal(data, v)
+	}
+	c.probeMu.Lock()
+	defer c.probeMu.Unlock()
+	if err != nil {
+		errText := err.Error()
+		if !c.probeChecked || c.connected.Load() || errText != c.probeLastErr {
+			c.logger.Warn("cluster connectivity check failed",
+				zap.String("server", c.restCfg.Host),
+				zap.Error(err))
+		}
+		c.probeChecked = true
+		c.probeLastErr = errText
+		c.connected.Store(false)
+		return
+	}
+	if !c.probeChecked || !c.connected.Load() {
+		c.logger.Info("cluster connected",
+			zap.String("server", c.restCfg.Host),
+			zap.String("version", v.GitVersion))
+	}
+	c.probeChecked = true
+	c.probeLastErr = ""
+	c.connected.Store(true)
+	c.version.Store(v.GitVersion)
 }
 
 func (c *Cluster) Name() string                                  { return c.name }
@@ -226,9 +235,15 @@ func (c *Cluster) Pause() {
 // Resume undoes Pause. The first Subscribe after Resume rebuilds whatever
 // informers the new subscribers ask for; we don't pre-warm anything because
 // the previous subscriber set may no longer be relevant. Idempotent.
-func (c *Cluster) Resume() {
+//
+// We kick a synchronous connectivity check before returning so the caller
+// (typically the /connect HTTP handler) sees `Connected() == true` in the
+// same response, and the UI's "live" dot flips green inside one round-trip
+// instead of waiting for the next 15 s probe tick.
+func (c *Cluster) Resume(ctx context.Context) {
 	if !c.paused.Swap(false) {
 		return
 	}
 	c.logger.Info("cluster resumed", zap.String("server", c.restCfg.Host))
+	c.checkConnectivity(ctx)
 }

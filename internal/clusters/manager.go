@@ -371,16 +371,19 @@ func (m *Manager) Disconnect(name string) error {
 	return nil
 }
 
-// Connect is the inverse of Disconnect — flips the cluster back to active.
-// The next Subscribe / stream rebuilds informers on demand.
-func (m *Manager) Connect(name string) error {
+// Connect is the inverse of Disconnect — flips the cluster back to active
+// AND issues an immediate connectivity probe so the caller can return a
+// `connected: true` ClusterInfo on the same HTTP turnaround. Without the
+// sync probe the dot in the cluster picker stayed grey for up to 15 s
+// after Reconnect, looking like the operation had failed.
+func (m *Manager) Connect(ctx context.Context, name string) error {
 	m.mu.RLock()
 	c, ok := m.clusters[name]
 	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("unknown cluster %q", name)
 	}
-	c.Resume()
+	c.Resume(ctx)
 	return nil
 }
 
