@@ -28,6 +28,8 @@ import { TerminalLauncherPage } from "./pages/TerminalLauncherPage";
 import { PortForwardsPage } from "./pages/PortForwardsPage";
 import { YAMLEditorWarmup } from "./components/YAMLEditor";
 import { api, type ClusterInfo } from "./lib/api";
+import { useTabs } from "./stores/tabs";
+import { destroyClusterStream } from "./lib/stream";
 import { useApp } from "./stores/app";
 import { SECTIONS } from "./nav/sections";
 import { favouriteAt } from "./lib/favourites";
@@ -56,6 +58,31 @@ export default function App() {
     const current = clusters.find((c) => c.current) ?? clusters[0];
     setCluster(current.name);
   }, [clusters, cluster, setCluster]);
+
+  // Global stale-tab + stale-stream sweeper. A tab is "stale" when its
+  // cluster is missing from the picker (removed elsewhere, SSO scope
+  // changed) or currently disconnected. Disconnect is an explicit "stop
+  // touching this cluster" action — leaving its tabs in the strip lets a
+  // stray click silently re-attach informers, which is the bug the user
+  // kept hitting. We sweep here at App level so it runs no matter which
+  // shell (Cluster vs Home) is rendered, including right after a page
+  // restore from localStorage where tabs are hydrated before any view
+  // gets a chance to clean them up.
+  useEffect(() => {
+    if (!clusters) return;
+    const live = new Set(clusters.filter((c) => !c.paused).map((c) => c.name));
+    const tabs = useTabs.getState().tabs;
+    const stale = tabs.filter((t) => !live.has(t.cluster));
+    if (stale.length === 0) return;
+    const staleNames = new Set(stale.map((t) => t.cluster));
+    for (const name of staleNames) {
+      destroyClusterStream(name);
+      useTabs.getState().closeForCluster(name);
+    }
+    if (cluster && !live.has(cluster)) {
+      useApp.getState().setCluster("");
+    }
+  }, [clusters, cluster]);
 
   // Apply theme on first paint.
   useEffect(() => {
@@ -188,12 +215,15 @@ function RootRedirect() {
 
 // HomeShell — what the user sees when they're not in any cluster: after
 // Disconnect, after Remove, on first launch with no clusters imported, or
-// on a fresh URL with no remembered selection. Renders the same Topbar +
-// Sidebar chrome as ClusterShell so the cluster picker, search, theme,
-// and settings buttons keep working — just with an empty workspace and a
-// clear "you're not connected to anything; pick a cluster" CTA. No
-// per-resource queries or WebSockets are mounted here, so a Disconnected
-// cluster genuinely stays untouched.
+// on a fresh URL with no remembered selection.
+//
+// Lens-style: only the Sidebar is rendered. No Topbar (no cluster picker
+// / namespace selector / global search / Create / live-badge — all of
+// these need an active cluster), no top tabs strip (no cluster context
+// to scope a tab to), no StatusBar (offline indicator + port-forwards
+// counter both need an active cluster too). The workspace area is just
+// a hint of what to do next. Toasts and the global command palette stay
+// available because they're cluster-independent.
 function HomeShell({ clusters }: { clusters: ClusterInfo[] }) {
   const navigate = useNavigate();
   const lastPage = useApp((s) => s.lastPage);
@@ -204,12 +234,11 @@ function HomeShell({ clusters }: { clusters: ClusterInfo[] }) {
 
   return (
     <div className="flex flex-col h-full bg-bg text-fg">
-      <TopTabs />
       <div
-        className="grid grid-rows-[44px_1fr] flex-1 min-h-0"
+        className="flex-1 min-h-0 grid"
         style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
       >
-        <div className="row-span-2 relative border-r border-line bg-bg-soft overflow-hidden">
+        <div className="relative border-r border-line bg-bg-soft overflow-hidden">
           <Sidebar onNavigate={(to) => {
             // Sidebar.onNavigate is the per-cluster section path; in home
             // mode there's no active cluster, so a click is meaningless —
@@ -244,38 +273,32 @@ function HomeShell({ clusters }: { clusters: ClusterInfo[] }) {
             }}
           />
         </div>
-        <div className="border-b border-line">
-          <Topbar />
-        </div>
-        <div className="overflow-hidden flex flex-col min-w-0 min-h-0">
-          <main className="flex-1 min-w-0 overflow-auto grid place-items-center p-8">
-            <div className="max-w-md text-center space-y-4">
-              <div className="text-fg-mute text-xs uppercase tracking-wider">k8s-view</div>
-              <div className="text-2xl font-medium">Not connected to any cluster</div>
-              <div className="text-fg-soft text-sm leading-relaxed">
-                {clusters.length === 0
-                  ? "You haven't imported any kubeconfigs yet. Use the cluster picker above to add one."
-                  : liveCount === 0
-                    ? "All your clusters are disconnected. Open the picker and click Connect on the one you want to work with."
-                    : "Pick a cluster from the sidebar or the cluster picker above to start exploring resources."}
-              </div>
-              {pickedFirst && (
-                <button
-                  className="btn-primary h-9 px-4 text-sm"
-                  onClick={() => {
-                    setCluster(pickedFirst.name);
-                    api.selectCluster(pickedFirst.name).catch(() => {});
-                    navigate(`/${encodeURIComponent(pickedFirst.name)}/${lastPage[pickedFirst.name] || "overview"}`);
-                  }}
-                >
-                  Open {pickedFirst.name}
-                </button>
-              )}
+        <main className="overflow-auto grid place-items-center p-8">
+          <div className="max-w-md text-center space-y-4">
+            <div className="text-fg-mute text-xs uppercase tracking-wider">k8s-view</div>
+            <div className="text-2xl font-medium">Not connected to any cluster</div>
+            <div className="text-fg-soft text-sm leading-relaxed">
+              {clusters.length === 0
+                ? "You haven't imported any kubeconfigs yet. Use the sidebar to add one."
+                : liveCount === 0
+                  ? "All your clusters are disconnected. Click any cluster in the sidebar to reconnect."
+                  : "Pick a cluster from the sidebar to start exploring resources."}
             </div>
-          </main>
-        </div>
+            {pickedFirst && (
+              <button
+                className="btn-primary h-9 px-4 text-sm"
+                onClick={() => {
+                  setCluster(pickedFirst.name);
+                  api.selectCluster(pickedFirst.name).catch(() => {});
+                  navigate(`/${encodeURIComponent(pickedFirst.name)}/${lastPage[pickedFirst.name] || "overview"}`);
+                }}
+              >
+                Open {pickedFirst.name}
+              </button>
+            )}
+          </div>
+        </main>
       </div>
-      <StatusBar />
       <CommandPalette />
       <Toasts />
     </div>

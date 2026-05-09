@@ -51,29 +51,28 @@ export function Topbar() {
   // current stream rather than a dead listener.
   const connected = useClusterConnected(cluster);
 
-  // Auto-cleanup of stale tabs. The cluster list is the authoritative
-  // source — anything that pointed at a name not in the list any more
-  // (the user removed it from another device, an SSO session lost an
-  // imported kubeconfig, etc.) gets its tabs closed here. We do NOT
-  // close tabs for `paused` clusters: the user disconnected on purpose,
-  // they expect to come back to where they were after Reconnect.
+  // Auto-cleanup of stale tabs. A tab is "stale" when its cluster either
+  // doesn't exist any more (removed from another device / SSO session
+  // dropped a kubeconfig) OR is currently disconnected. Disconnect is an
+  // explicit "stop touching this cluster" — leaving its tabs around lets
+  // a stray sidebar click, an arrow-key tab cycle, or a page restore
+  // silently re-attach informers behind the user's back, which is exactly
+  // the bug the user reported. So we close them every time the picker
+  // refreshes.
   useEffect(() => {
     if (!clusters) return;
-    const known = new Set(clusters.map((c) => c.name));
-    const stale = useTabs.getState().tabs.filter((t) => !known.has(t.cluster));
+    const live = new Set(clusters.filter((c) => !c.paused).map((c) => c.name));
+    const stale = useTabs.getState().tabs.filter((t) => !live.has(t.cluster));
     if (stale.length === 0) return;
     const staleNames = new Set(stale.map((t) => t.cluster));
     for (const name of staleNames) {
       destroyClusterStream(name);
       useTabs.getState().closeForCluster(name);
-      useApp.getState().forgetCluster(name);
     }
-    notify_.warn(
-      `Closed ${stale.length} tab${stale.length === 1 ? "" : "s"}`,
-      `Cluster${staleNames.size === 1 ? "" : "s"} no longer registered: ${[...staleNames].join(", ")}.`,
-    );
-    // Bounce out of the dead cluster route too.
-    if (cluster && !known.has(cluster)) navigate("/");
+    if (cluster && !live.has(cluster)) {
+      useApp.getState().setCluster("");
+      navigate("/");
+    }
   }, [clusters, cluster, navigate]);
 
   return (
