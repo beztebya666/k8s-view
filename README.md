@@ -18,7 +18,8 @@ point it at a kubeconfig, and you're done.
 |---|---|
 | **Latest release** | `v0.3.0` |
 | **License** | Apache-2.0 |
-| **Image** | `ghcr.io/beztebya666/k8s-view:0.3.0` |
+| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.3.0` |
+| **Docker Hub image** | `beztebya666/k8s-view:v0.3.0` |
 | **Build** | Go 1.22 + Node 20 |
 | **Compatible with** | Kubernetes 1.20 → 1.36 (`client-go` v0.31, dynamic discovery) |
 
@@ -174,6 +175,19 @@ Open http://localhost:8080.
 
 ### Docker
 
+The image is published to two registries — pick whichever is closer to
+you. Both carry the same digest.
+
+```bash
+# GitHub Container Registry
+docker pull ghcr.io/beztebya666/k8s-view:v0.3.0
+
+# Docker Hub
+docker pull beztebya666/k8s-view:v0.3.0
+```
+
+`:latest` is also available on both and tracks the newest release.
+
 For a local k3s/minikube kubeconfig that points at a loopback address,
 host-network the container so `https://127.0.0.1:6443` resolves correctly:
 
@@ -182,7 +196,7 @@ docker run --rm -it \
   --network host \
   --security-opt label=disable \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
-  ghcr.io/beztebya666/k8s-view:0.3.0
+  ghcr.io/beztebya666/k8s-view:v0.3.0
 ```
 
 For a kubeconfig that points at a routable API server, bridge networking
@@ -192,7 +206,7 @@ with a port publish is fine:
 docker run --rm -it \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
   -p 8080:8080 \
-  ghcr.io/beztebya666/k8s-view:0.3.0
+  ghcr.io/beztebya666/k8s-view:v0.3.0
 ```
 
 `make docker-run` wraps the host-network form for local development.

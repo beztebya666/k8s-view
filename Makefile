@@ -12,10 +12,10 @@
 BIN          ?= bin/k8s-view
 GO           ?= go
 NPM          ?= npm
-VERSION      ?= 0.3.0
+VERSION      ?= v0.3.0
 COMMIT       ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 LDFLAGS      ?= -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
-DOCKER_IMG   ?= ghcr.io/k8s-view/k8s-view:$(VERSION)
+DOCKER_IMG   ?= ghcr.io/beztebya666/k8s-view:$(VERSION)
 
 .PHONY: all build frontend backend run tidy clean docker docker-run helm helm-template
 

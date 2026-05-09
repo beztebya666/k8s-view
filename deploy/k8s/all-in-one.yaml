@@ -100,7 +100,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: k8s-view
-          image: ghcr.io/beztebya666/k8s-view:0.3.0
+          image: ghcr.io/beztebya666/k8s-view:v0.3.0
           imagePullPolicy: IfNotPresent
           args:
             - --in-cluster

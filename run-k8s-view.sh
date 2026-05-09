@@ -19,7 +19,7 @@ echo "[4/5] Build image ${IMAGE}..."
 docker build -t "${IMAGE}" .
 
 echo "[5/5] Run ${IMAGE}..."
-docker run --rm -it \
+docker run -d -it \
   --network host \
   --security-opt label=disable \
   -v "${KUBECONFIG_PATH}:/home/app/.kube/config:ro" \

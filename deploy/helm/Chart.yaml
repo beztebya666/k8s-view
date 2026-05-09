@@ -10,7 +10,7 @@ type: application
 # Chart version is bumped on every chart change.
 # appVersion tracks the binary release.
 version: 0.3.1
-appVersion: "0.3.0"
+appVersion: "v0.3.0"
 kubeVersion: ">=1.20.0-0"
 home: https://github.com/beztebya666/k8s-view
 sources:
