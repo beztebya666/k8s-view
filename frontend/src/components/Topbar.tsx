@@ -6,7 +6,7 @@ import clsx from "clsx";
 import { api, ClusterInfo } from "../lib/api";
 import { useApp } from "../stores/app";
 import { useTabs } from "../stores/tabs";
-import { getClusterStream, destroyClusterStream } from "../lib/stream";
+import { getClusterStream, destroyClusterStream, useClusterConnected } from "../lib/stream";
 import { AddClusterModal } from "./AddClusterModal";
 import { modals } from "./Modals";
 import { notify_ } from "../lib/notifications";
@@ -46,12 +46,10 @@ export function Topbar() {
   });
   const selectedNamespaces = namespaces.length > 0 ? namespaces : (namespace ? [namespace] : []);
 
-  const [connected, setConnected] = useState(false);
-  useEffect(() => {
-    if (!cluster) return;
-    const s = getClusterStream(cluster);
-    return s.onConnectionChange(setConnected);
-  }, [cluster]);
+  // Pool-aware: re-binds across destroy/create cycles (Disconnect+Connect,
+  // remove+re-import) so the live/offline badge actually reflects the
+  // current stream rather than a dead listener.
+  const connected = useClusterConnected(cluster);
 
   // Auto-cleanup of stale tabs. The cluster list is the authoritative
   // source — anything that pointed at a name not in the list any more
@@ -111,6 +109,11 @@ export function Topbar() {
         onConnect={async (name) => {
           try {
             await api.connectCluster(name);
+            // Wake the pool — create a fresh ClusterStream so the live
+            // badge flips back as soon as the WebSocket opens, instead of
+            // waiting for some other view (resource list, side panel) to
+            // mount and trigger getClusterStream itself.
+            getClusterStream(name);
             await queryClient.invalidateQueries({ queryKey: ["clusters"] });
             notify_.ok(`Reconnected ${name}`);
           } catch (e: any) {

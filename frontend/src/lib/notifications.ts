@@ -26,9 +26,20 @@ export interface Toast {
 
 const queue: Toast[] = [];
 const listeners = new Set<() => void>();
+// `useSyncExternalStore` compares snapshots with Object.is. If we returned
+// the live `queue` reference here, mutating it in-place (`unshift`,
+// `splice`, `length=0`) would leave Object.is(prev, next) === true and the
+// React toast tray would never re-render — toasts would visibly stay on
+// screen forever after their setTimeout fired dismiss(). We rebuild a
+// frozen copy after every queue mutation and hand THAT to React.
+let snapshot: readonly Toast[] = [];
+
+function rebuildSnapshot() {
+  snapshot = queue.slice();
+}
 
 export function getSnapshot(): readonly Toast[] {
-  return queue;
+  return snapshot;
 }
 
 export function subscribe(cb: () => void): () => void {
@@ -97,5 +108,6 @@ function defaultDuration(tone: ToastTone): number {
 }
 
 function notify() {
+  rebuildSnapshot();
   for (const cb of listeners) cb();
 }

@@ -5,6 +5,8 @@
 // because it keeps browser-side diagnostics obvious and avoids cross-library
 // MessagePack edge cases for Kubernetes' dynamic objects.
 
+import { useEffect, useState } from "react";
+
 export type StreamFrame = {
   sid: number;
   kind: "snapshot" | "add" | "update" | "delete" | "error" | "pong";
@@ -220,11 +222,34 @@ export class ClusterStream {
 
 // Cache one ClusterStream per cluster name.
 const streams = new Map<string, ClusterStream>();
+
+// Pool-version notifier. Bumped whenever a stream is created or destroyed
+// for *any* cluster. Lets `useClusterConnected` re-subscribe to the new
+// stream object after Disconnect → Connect cycles instead of keeping a
+// listener glued to a now-dead ClusterStream that will never fire again.
+const poolListeners = new Set<() => void>();
+let poolVersion = 0;
+
+function bumpPool() {
+  poolVersion++;
+  for (const l of poolListeners) l();
+}
+
+export function subscribeStreamPool(cb: () => void): () => void {
+  poolListeners.add(cb);
+  return () => { poolListeners.delete(cb); };
+}
+
+export function streamPoolVersion(): number {
+  return poolVersion;
+}
+
 export function getClusterStream(cluster: string): ClusterStream {
   let s = streams.get(cluster);
   if (!s) {
     s = new ClusterStream(cluster);
     streams.set(cluster, s);
+    bumpPool();
   }
   return s;
 }
@@ -238,4 +263,51 @@ export function destroyClusterStream(cluster: string): void {
   if (!s) return;
   s.close();
   streams.delete(cluster);
+  bumpPool();
+}
+
+// useClusterConnected — pool-aware "is the live WS open?" hook. Compared to
+// a naive `useEffect(() => getClusterStream(cluster).onConnectionChange(...),
+// [cluster])`, this re-binds whenever the pool changes (i.e. when
+// destroyClusterStream + a fresh getClusterStream replace the previous
+// object). Without that, the Topbar's "live"/"offline" badge stayed glued
+// to the dead pre-disconnect stream after the user clicked Reconnect, and
+// fresh imports landed on a stale listener pointing at a previous "dead"
+// pool entry of the same name.
+//
+// The hook also creates the stream on first mount: if the user just hit
+// Connect on a paused cluster, we want the WebSocket to come up
+// immediately so the badge flips back without waiting for some other view
+// to subscribe.
+export function useClusterConnected(cluster: string): boolean {
+  const [connected, setConnected] = useState(false);
+  useEffect(() => {
+    if (!cluster) {
+      setConnected(false);
+      return;
+    }
+    let unbind: (() => void) | undefined;
+    const bind = () => {
+      unbind?.();
+      const s = getClusterStream(cluster);
+      setConnected(s.isConnected());
+      unbind = s.onConnectionChange(setConnected);
+    };
+    bind();
+    // Re-bind on pool churn (destroy+create) so we always listen to the
+    // *current* stream object for this name.
+    const offPool = subscribeStreamPool(() => {
+      // Only re-bind if the pool entry for our cluster actually changed
+      // identity (avoid burning a re-subscribe on every unrelated pool
+      // tweak). getClusterStream returns the live entry; we compare by
+      // running `bind()` unconditionally — the cost is negligible (one Map
+      // lookup + one listener swap) and keeps the logic obvious.
+      bind();
+    });
+    return () => {
+      unbind?.();
+      offPool();
+    };
+  }, [cluster]);
+  return connected;
 }
