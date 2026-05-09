@@ -116,7 +116,7 @@ export function useTabsRouterSync() {
     const current = parseLocation(location.pathname, location.search, fallbackCluster);
     if (!current) return;
 
-    const { tabs, activeId, openTab, patchActive, patchTab, selectTab } = useTabs.getState();
+    const { tabs, activeId, openTab, openPreview, patchActive, patchTab, selectTab } = useTabs.getState();
 
     // First sync after mount: deep-link / restore. Don't clobber persisted
     // tabs — focus the matching one if it exists, else fork a new one.
@@ -132,16 +132,26 @@ export function useTabsRouterSync() {
       return;
     }
 
-    // Subsequent navigation. Two cases:
+    // Subsequent navigation. Three cases:
     //   1. Same (cluster, pathname) as the active tab — only the query
-    //      changed (a detail panel opened, etc.). Patch in place.
-    //   2. Different route — open or focus a tab, mirroring Lens behaviour
-    //      where every nav lands in its own tab.
+    //      changed (a detail panel opened, etc.). Patch in place; preview
+    //      status is preserved.
+    //   2. Different route AND the active tab is a preview — replace the
+    //      preview's content in place (Lens / VSCode behaviour). Without
+    //      this, clicking a row in a Pods list (which navigates to the
+    //      pod's detail route) would commit the preview and stack new
+    //      pills as the user clicked around.
+    //   3. Otherwise — open or focus a permanent tab, mirroring Lens
+    //      behaviour where every cross-cluster nav lands in its own tab.
     const active = tabs.find((t) => t.id === activeId);
     if (active && active.cluster === current.cluster && active.pathname === current.pathname) {
       if (active.search !== current.search) {
         patchActive({ search: current.search });
       }
+      return;
+    }
+    if (active && active.preview) {
+      openPreview(current);
       return;
     }
     openTab(current);
@@ -303,6 +313,7 @@ function TabPill({
   const desc = describe(tab);
   const Icon = desc.icon;
   const tint = useClusterColor(tab.cluster);
+  const commitTab = useTabs((s) => s.commitTab);
   return (
     <div
       role="tab"
@@ -316,10 +327,14 @@ function TabPill({
           : "bg-bg text-fg-soft hover:bg-bg-mute hover:text-fg",
       )}
       onClick={() => onSelect(tab)}
+      onDoubleClick={() => commitTab(tab.id)}
       onMouseDown={(e) => onMiddleClick(e, tab)}
       onAuxClick={(e) => onMiddleClick(e, tab)}
       onContextMenu={(e) => onContextMenu(e, tab, idx)}
-      title={`${desc.label} · ${tab.cluster}${desc.detail ? ` · ${desc.detail}` : ""}`}
+      title={
+        `${desc.label} · ${tab.cluster}${desc.detail ? ` · ${desc.detail}` : ""}`
+        + (tab.preview ? " · preview tab (double-click to keep)" : "")
+      }
     >
       {active && (
         <span
@@ -335,8 +350,8 @@ function TabPill({
         style={{ color: tint.hsl, opacity: active ? 1 : 0.85 }}
       />
       <span className="min-w-0 flex flex-col leading-tight overflow-hidden">
-        <span className="truncate">{desc.label}</span>
-        <span className="truncate text-[10px] text-fg-mute">
+        <span className={clsx("truncate", tab.preview && "italic")}>{desc.label}</span>
+        <span className={clsx("truncate text-[10px] text-fg-mute", tab.preview && "italic")}>
           {tab.cluster}{desc.detail ? ` · ${desc.detail}` : ""}
         </span>
       </span>

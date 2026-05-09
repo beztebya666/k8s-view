@@ -15,6 +15,15 @@ export type PageTab = {
   pathname: string;
   /** Raw query string ("?d=…&tab=yaml") or empty. */
   search: string;
+  /** Lens / VSCode-style "preview" tab. A preview tab is what gets opened
+   *  by a single sidebar click — it's reused (replaced in place) by the
+   *  *next* sidebar click instead of stacking another pill in the strip.
+   *  The tab pill renders italic so the user can tell it's transient.
+   *  Any explicit user action (double-click on the pill, opening a logs/
+   *  exec session, hitting "+ New tab", or anything that creates a tab
+   *  with preview:false) commits the tab — it survives subsequent
+   *  sidebar navigation. At most one preview tab exists at a time. */
+  preview?: boolean;
 };
 
 export type TabsState = {
@@ -25,6 +34,16 @@ export type TabsState = {
    *  as in-tab view state, so an existing tab is reused with its search
    *  refreshed rather than duplicating. Returns the resulting active id. */
   openTab: (tab: Omit<PageTab, "id">) => string;
+  /** Open a "preview" tab — Lens / VSCode behaviour:
+   *  - if there's already a preview tab, replace its (cluster, pathname,
+   *    search) in place and keep its id, so the sidebar doesn't pile up
+   *    pills as the user clicks around;
+   *  - otherwise create a fresh tab with preview:true.
+   *  Returns the resulting active id. */
+  openPreview: (tab: Omit<PageTab, "id" | "preview">) => string;
+  /** Promote the tab from preview to permanent so subsequent sidebar
+   *  clicks open separate pills instead of replacing this one. */
+  commitTab: (id: string) => void;
   /** Like openTab, but always creates a fresh tab (bypasses the
    *  "tab with same route already exists, reuse it" dedup). Used by the
    *  explicit "New tab" button in TopTabs — clicking + with the current
@@ -84,6 +103,50 @@ export const useTabs = create<TabsState>()(
         const next: PageTab = { id, ...tab };
         set((s) => ({ tabs: [...s.tabs, next], activeId: id }));
         return id;
+      },
+
+      openPreview: (tab) => {
+        const tabs = get().tabs;
+        // If we already have a preview tab, replace its content in place.
+        const previewIdx = tabs.findIndex((t) => t.preview);
+        if (previewIdx >= 0) {
+          const existing = tabs[previewIdx];
+          // Same route — nothing to do beyond focusing it.
+          if (existing.cluster === tab.cluster && existing.pathname === tab.pathname && existing.search === tab.search) {
+            if (get().activeId !== existing.id) set({ activeId: existing.id });
+            return existing.id;
+          }
+          const replaced = tabs.slice();
+          replaced[previewIdx] = {
+            ...existing,
+            cluster: tab.cluster,
+            pathname: tab.pathname,
+            search: tab.search,
+            preview: true,
+          };
+          set({ tabs: replaced, activeId: existing.id });
+          return existing.id;
+        }
+        // No preview yet — but if a permanent tab for this exact route
+        // already exists, focus it instead of opening a duplicate.
+        const existing = tabs.find((t) => sameRoute(tab, t));
+        if (existing) {
+          set({ activeId: existing.id });
+          return existing.id;
+        }
+        const id = makeId();
+        const next: PageTab = { id, ...tab, preview: true };
+        set((s) => ({ tabs: [...s.tabs, next], activeId: id }));
+        return id;
+      },
+
+      commitTab: (id) => {
+        const { tabs } = get();
+        const idx = tabs.findIndex((t) => t.id === id);
+        if (idx < 0 || !tabs[idx].preview) return;
+        const replaced = tabs.slice();
+        replaced[idx] = { ...tabs[idx], preview: false };
+        set({ tabs: replaced });
       },
 
       createTab: (tab) => {

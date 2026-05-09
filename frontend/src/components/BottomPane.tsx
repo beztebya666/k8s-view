@@ -24,6 +24,7 @@ import { TerminalLauncherInline } from "../pages/TerminalLauncherPage";
 import { YAMLEditPane } from "./YAMLEditPane";
 import { CreateResourcePane } from "./CreateResourcePane";
 import { clusterColor, useClusterColor } from "../lib/clusterColor";
+import { useTabs as useTabsStore } from "../stores/tabs";
 import { useApp } from "../stores/app";
 
 const STORAGE_KEY = "k8s-view:bottom-pane-height";
@@ -646,6 +647,14 @@ export function useBottomPane() {
   const [params, setParams] = useSearchParams();
   return useMemo(() => ({
     push(r: BottomRef) {
+      // Opening a logs / exec / yaml / port-forward / create session is
+      // explicit user intent — promote the active preview tab to a
+      // permanent one so the next sidebar click doesn't replace the tab
+      // out from under the running session. No-op when the active tab is
+      // already permanent.
+      const activeId = useTabsStore.getState().activeId;
+      if (activeId) useTabsStore.getState().commitTab(activeId);
+
       const refs = parseBottomList(params.get("b"));
       const i = refs.findIndex((x) => refsEqual(x, r));
       const activeIdx = Math.max(0, Number(params.get("bt") ?? 0));
@@ -692,6 +701,27 @@ export function useBottomPane() {
       const idx = Number(params.get("bt") ?? 0);
       const active = refs[Number.isFinite(idx) && idx >= 0 ? idx : 0];
       return !!active && refsEqual(active, r);
+    },
+    /** Drop every bottom-pane session that targets the named cluster.
+     *  Called from the cluster Disconnect / Remove flows so an open shell,
+     *  port-forward, or log tail doesn't keep the WebSocket alive against
+     *  a cluster the user just took offline. */
+    closeForCluster(cluster: string) {
+      const refs = parseBottomList(params.get("b"));
+      const remaining = refs.filter((r) => r.cluster !== cluster);
+      if (remaining.length === refs.length) return;
+      const np = new URLSearchParams(params);
+      if (remaining.length === 0) {
+        np.delete("b");
+        np.delete("bt");
+      } else {
+        np.set("b", refsToQuery(remaining));
+        const activeIdx = Math.max(0, Number(params.get("bt") ?? 0));
+        const nextIdx = Math.min(activeIdx, remaining.length - 1);
+        if (nextIdx === 0) np.delete("bt");
+        else np.set("bt", String(nextIdx));
+      }
+      setParams(np);
     },
   }), [params, setParams]);
 }

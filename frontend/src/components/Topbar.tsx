@@ -95,12 +95,32 @@ export function Topbar() {
         onDisconnect={async (name) => {
           try {
             await api.disconnectCluster(name);
-            // Tear down the live WebSocket so any open list view stops
-            // hammering /stream and surfaces the "cluster disconnected"
-            // banner via the dead-stream error frame. The next Connect
-            // creates a fresh stream and the page rehydrates from scratch.
+            // Hard disconnect — tear EVERYTHING down for this cluster so
+            // the user can't keep poking around through cached views:
+            //   1. WebSocket stream pool (stops the live deltas)
+            //   2. Every top tab pinned to this cluster (Pods, Deploys,
+            //      detail panels — anything that would resurrect the
+            //      stream by re-mounting useResourceList)
+            //   3. Every bottom-pane session for this cluster (logs, exec,
+            //      attach, port-forward, YAML edit, Create) — these hold
+            //      their own long-lived WebSockets and would otherwise
+            //      stay alive after Disconnect
+            //   4. Per-cluster query cache (namespaces, events, …) so the
+            //      next page mount doesn't render stale data for one
+            //      frame before the new fetch reports the disconnected
+            //      state
+            //   5. If the active route was on this cluster, bounce to "/"
+            //      — the home screen renders the cluster picker and not
+            //      a half-broken Pods page
             destroyClusterStream(name);
+            useTabs.getState().closeForCluster(name);
+            bottom.closeForCluster(name);
+            await queryClient.removeQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey.includes(name) });
             await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+            if (cluster === name) {
+              useApp.getState().setCluster("");
+              navigate("/");
+            }
             notify_.info(`Disconnected ${name}`, "Click Connect to resume.");
           } catch (e: any) {
             notify_.bad("Disconnect failed", e?.message ?? String(e));

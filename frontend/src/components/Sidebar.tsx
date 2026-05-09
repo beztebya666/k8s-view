@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { ChevronDown, ChevronRight, FileUp, Folder, Plus, Search, Star, Terminal, X } from "lucide-react";
 import { api, type ClusterInfo } from "../lib/api";
 import { useApp } from "../stores/app";
+import { useTabs } from "../stores/tabs";
 import { SECTIONS, type NavItem, type NavSection } from "../nav/sections";
 import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { AddClusterModal } from "./AddClusterModal";
@@ -53,9 +54,16 @@ export function Sidebar({ onNavigate }: { onNavigate: (to: string) => void }) {
     setExpandedSections((prev) => toggleSet(prev, sectionKey(cluster, label)));
   };
 
+  // Sidebar clicks open a *preview* tab — VSCode/Lens behaviour. The
+  // preview tab is replaced in place by the next sidebar click instead of
+  // stacking another pill in the strip. The user commits a preview tab to
+  // a permanent one by double-clicking the pill, by opening a logs/exec
+  // session from it, or by hitting "+ New tab" in the strip.
   const openRoute = (clusterName: string, to: string) => {
     api.selectCluster(clusterName).catch(() => {});
-    navigate(`/${encodeURIComponent(clusterName)}/${to.replace(/^\/+/, "")}`);
+    const path = to.replace(/^\/+/, "");
+    useTabs.getState().openPreview({ cluster: clusterName, pathname: path, search: "" });
+    navigate(`/${encodeURIComponent(clusterName)}/${path}`);
   };
 
   const clustersToRender = clusters.length > 0

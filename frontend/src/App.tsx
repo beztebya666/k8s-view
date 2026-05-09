@@ -27,7 +27,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TerminalLauncherPage } from "./pages/TerminalLauncherPage";
 import { PortForwardsPage } from "./pages/PortForwardsPage";
 import { YAMLEditorWarmup } from "./components/YAMLEditor";
-import { api } from "./lib/api";
+import { api, type ClusterInfo } from "./lib/api";
 import { useApp } from "./stores/app";
 import { SECTIONS } from "./nav/sections";
 import { favouriteAt } from "./lib/favourites";
@@ -167,11 +167,119 @@ export default function App() {
 // Top-level "/" redirect — picks the active cluster and routes to either
 // the last page the user visited there (workspace persistence) or the
 // Overview if they've never been before.
+//
+// When the user is *not* connected to any cluster (no active cluster, or
+// the active cluster is currently disconnected) we render the home screen
+// instead of redirecting. The home screen shows the cluster picker shell
+// and an empty workspace — explicit "you're not in any cluster right now"
+// state. This is the page Disconnect lands you on.
 function RootRedirect() {
   const cluster = useApp((s) => s.cluster);
   const lastPage = useApp((s) => s.lastPage);
+  const { data: clusters } = useQuery({ queryKey: ["clusters"], queryFn: api.clusters });
   const target = lastPage[cluster] || "overview";
+  const activeInfo = clusters?.find((c) => c.name === cluster);
+  const inHome = !cluster || !activeInfo || activeInfo.paused;
+  if (inHome) {
+    return <HomeShell clusters={clusters ?? []} />;
+  }
   return <Navigate to={`/${encodeURIComponent(cluster)}/${target}`} replace />;
+}
+
+// HomeShell — what the user sees when they're not in any cluster: after
+// Disconnect, after Remove, on first launch with no clusters imported, or
+// on a fresh URL with no remembered selection. Renders the same Topbar +
+// Sidebar chrome as ClusterShell so the cluster picker, search, theme,
+// and settings buttons keep working — just with an empty workspace and a
+// clear "you're not connected to anything; pick a cluster" CTA. No
+// per-resource queries or WebSockets are mounted here, so a Disconnected
+// cluster genuinely stays untouched.
+function HomeShell({ clusters }: { clusters: ClusterInfo[] }) {
+  const navigate = useNavigate();
+  const lastPage = useApp((s) => s.lastPage);
+  const setCluster = useApp((s) => s.setCluster);
+  const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
+  const liveCount = clusters.filter((c) => !c.paused).length;
+  const pickedFirst = clusters.find((c) => !c.paused);
+
+  return (
+    <div className="flex flex-col h-full bg-bg text-fg">
+      <TopTabs />
+      <div
+        className="grid grid-rows-[44px_1fr] flex-1 min-h-0"
+        style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
+      >
+        <div className="row-span-2 relative border-r border-line bg-bg-soft overflow-hidden">
+          <Sidebar onNavigate={(to) => {
+            // Sidebar.onNavigate is the per-cluster section path; in home
+            // mode there's no active cluster, so a click is meaningless —
+            // ignore it. Cluster row clicks still work because they
+            // navigate to /:cluster/* directly.
+            void to;
+          }} />
+          <div
+            className="sidebar-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startWidth = sidebarWidth;
+              let latest = startWidth;
+              document.body.style.cursor = "col-resize";
+              document.body.style.userSelect = "none";
+              const onMove = (ev: PointerEvent) => {
+                latest = clamp(startWidth + ev.clientX - startX, SIDEBAR_MIN, maxSidebarWidth());
+                setSidebarWidth(latest);
+              };
+              const onUp = () => {
+                document.body.style.cursor = "";
+                document.body.style.userSelect = "";
+                window.removeEventListener("pointermove", onMove);
+                window.removeEventListener("pointerup", onUp);
+                try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(latest))); } catch { /* ignore */ }
+              };
+              window.addEventListener("pointermove", onMove);
+              window.addEventListener("pointerup", onUp);
+            }}
+          />
+        </div>
+        <div className="border-b border-line">
+          <Topbar />
+        </div>
+        <div className="overflow-hidden flex flex-col min-w-0 min-h-0">
+          <main className="flex-1 min-w-0 overflow-auto grid place-items-center p-8">
+            <div className="max-w-md text-center space-y-4">
+              <div className="text-fg-mute text-xs uppercase tracking-wider">k8s-view</div>
+              <div className="text-2xl font-medium">Not connected to any cluster</div>
+              <div className="text-fg-soft text-sm leading-relaxed">
+                {clusters.length === 0
+                  ? "You haven't imported any kubeconfigs yet. Use the cluster picker above to add one."
+                  : liveCount === 0
+                    ? "All your clusters are disconnected. Open the picker and click Connect on the one you want to work with."
+                    : "Pick a cluster from the sidebar or the cluster picker above to start exploring resources."}
+              </div>
+              {pickedFirst && (
+                <button
+                  className="btn-primary h-9 px-4 text-sm"
+                  onClick={() => {
+                    setCluster(pickedFirst.name);
+                    api.selectCluster(pickedFirst.name).catch(() => {});
+                    navigate(`/${encodeURIComponent(pickedFirst.name)}/${lastPage[pickedFirst.name] || "overview"}`);
+                  }}
+                >
+                  Open {pickedFirst.name}
+                </button>
+              )}
+            </div>
+          </main>
+        </div>
+      </div>
+      <StatusBar />
+      <CommandPalette />
+      <Toasts />
+    </div>
+  );
 }
 
 function ClusterShell() {
