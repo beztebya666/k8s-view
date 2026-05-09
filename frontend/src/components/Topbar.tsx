@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileUp, Trash2, PlugZap, Unplug } from "lucide-react";
@@ -92,32 +93,42 @@ export function Topbar() {
           setAddOpen(true);
         }}
         onDisconnect={async (name) => {
-          // Optimistic UI sequence — order matters to avoid the
-          // ClusterShell→RootRedirect→ClusterShell flicker:
+          // Disconnect must FEEL instant. Three traps to avoid:
           //
-          //   a) setCluster("") FIRST. Without this, navigate("/") below
-          //      lands on RootRedirect, which still sees the stale
-          //      clusters cache (paused=false because invalidate hasn't
-          //      run yet) and redirects right back to /<cluster>/overview.
-          //      ClusterShell remounts; the next refetch reports paused;
-          //      its guard fires <Navigate to="/">; ClusterShell unmounts
-          //      again. Two mount cycles = the millisecond flicker the
-          //      user sees on Disconnect.
-          //   b) navigate("/", replace) — switches the route in the same
-          //      reducer pass, no intermediate frame.
-          //   c) Local cleanup (stream pool, top tabs, bottom pane).
-          //   d) THEN the network call + cache invalidation.
+          //   1) React 18 batches state updates inside event handlers
+          //      and commits them only after the handler returns. With
+          //      a plain setCluster("") + navigate("/"), the browser
+          //      keeps painting the still-mounted ClusterShell (heavy
+          //      Overview charts, live metrics) until the handler
+          //      finishes. flushSync forces React to commit + paint the
+          //      HomeShell synchronously, before we move on.
           //
-          // Failure path: the navigate has already happened, so the user
-          // is sitting on the home shell. We surface a toast and let the
-          // subsequent refetch reconcile state.
+          //   2) RootRedirect reads the cached ["clusters"] response. If
+          //      we navigate("/") *before* clearing cluster=, RootRedirect
+          //      sees cluster="default" + cached paused=false and
+          //      bounces straight back to /default/overview, mounting
+          //      ClusterShell a second time. Wiping cluster=" "" first
+          //      short-circuits the inHome check on `!cluster`.
+          //
+          //   3) bottom.closeForCluster(name) calls setParams, which is
+          //      a react-router action keyed off the *current* URL. If
+          //      we already navigated to "/", the call could write
+          //      params back onto the old route. So when we're leaving
+          //      the cluster's own page we skip the bottom-pane URL
+          //      mutation — the BottomPaneHost re-reads on remount and
+          //      the new URL has no `b=` to begin with.
           if (cluster === name) {
-            useApp.getState().setCluster("");
-            navigate("/", { replace: true });
+            flushSync(() => {
+              useApp.getState().setCluster("");
+              navigate("/", { replace: true });
+            });
+          } else {
+            // Different cluster's view stays mounted; just drop its
+            // bottom-pane sessions in place.
+            bottom.closeForCluster(name);
           }
           destroyClusterStream(name);
           useTabs.getState().closeForCluster(name);
-          bottom.closeForCluster(name);
           try {
             await api.disconnectCluster(name);
             await queryClient.removeQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey.includes(name) });
