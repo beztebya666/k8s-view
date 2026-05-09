@@ -7,6 +7,10 @@ export type ClusterInfo = {
   kubeconfig?: string;
   current: boolean;
   connected: boolean;
+  /** True when the user clicked Disconnect — the cluster object stays in
+   *  the picker but no informers run and the WebSocket /stream returns 409.
+   *  Distinguishes "intentional pause" from "apiserver unreachable". */
+  paused?: boolean;
   version?: string;
 };
 
@@ -72,6 +76,15 @@ export const api = {
 
   removeCluster: (name: string) =>
     jfetch<{ removed: string }>(`/api/v1/clusters/${encodeURIComponent(name)}`, { method: "DELETE" }),
+
+  // Soft-disconnect: keep the cluster in the picker but stop every
+  // informer / probe and reject new stream subscriptions until the user
+  // calls connectCluster.
+  disconnectCluster: (name: string) =>
+    jfetch<{ disconnected: string }>(`/api/v1/clusters/${encodeURIComponent(name)}/disconnect`, { method: "POST" }),
+
+  connectCluster: (name: string) =>
+    jfetch<{ connected: string }>(`/api/v1/clusters/${encodeURIComponent(name)}/connect`, { method: "POST" }),
 
   importCluster: (opts: { kubeconfig?: string; path?: string; name?: string }) =>
     jfetch<{ imported: string[] }>(`/api/v1/clusters/import`, {

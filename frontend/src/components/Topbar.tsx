@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileUp, Trash2 } from "lucide-react";
+import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileUp, Trash2, PlugZap, Unplug } from "lucide-react";
 import clsx from "clsx";
 import { api, ClusterInfo } from "../lib/api";
 import { useApp } from "../stores/app";
@@ -53,6 +53,31 @@ export function Topbar() {
     return s.onConnectionChange(setConnected);
   }, [cluster]);
 
+  // Auto-cleanup of stale tabs. The cluster list is the authoritative
+  // source — anything that pointed at a name not in the list any more
+  // (the user removed it from another device, an SSO session lost an
+  // imported kubeconfig, etc.) gets its tabs closed here. We do NOT
+  // close tabs for `paused` clusters: the user disconnected on purpose,
+  // they expect to come back to where they were after Reconnect.
+  useEffect(() => {
+    if (!clusters) return;
+    const known = new Set(clusters.map((c) => c.name));
+    const stale = useTabs.getState().tabs.filter((t) => !known.has(t.cluster));
+    if (stale.length === 0) return;
+    const staleNames = new Set(stale.map((t) => t.cluster));
+    for (const name of staleNames) {
+      destroyClusterStream(name);
+      useTabs.getState().closeForCluster(name);
+      useApp.getState().forgetCluster(name);
+    }
+    notify_.warn(
+      `Closed ${stale.length} tab${stale.length === 1 ? "" : "s"}`,
+      `Cluster${staleNames.size === 1 ? "" : "s"} no longer registered: ${[...staleNames].join(", ")}.`,
+    );
+    // Bounce out of the dead cluster route too.
+    if (cluster && !known.has(cluster)) navigate("/");
+  }, [clusters, cluster, navigate]);
+
   return (
     <div className="h-11 flex items-center gap-3 px-3 bg-bg-soft">
       <ClusterPicker
@@ -68,6 +93,29 @@ export function Topbar() {
         onAdd={() => {
           setOpenMenu(null);
           setAddOpen(true);
+        }}
+        onDisconnect={async (name) => {
+          try {
+            await api.disconnectCluster(name);
+            // Tear down the live WebSocket so any open list view stops
+            // hammering /stream and surfaces the "cluster disconnected"
+            // banner via the dead-stream error frame. The next Connect
+            // creates a fresh stream and the page rehydrates from scratch.
+            destroyClusterStream(name);
+            await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+            notify_.info(`Disconnected ${name}`, "Click Connect to resume.");
+          } catch (e: any) {
+            notify_.bad("Disconnect failed", e?.message ?? String(e));
+          }
+        }}
+        onConnect={async (name) => {
+          try {
+            await api.connectCluster(name);
+            await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+            notify_.ok(`Reconnected ${name}`);
+          } catch (e: any) {
+            notify_.bad("Connect failed", e?.message ?? String(e));
+          }
         }}
         onRemove={async (name) => {
           const ok = await modals.confirm({
@@ -191,12 +239,14 @@ function mergeNamespaces(apiNamespaces: string[], manualNamespaces: string[]) {
 }
 
 function ClusterPicker({
-  clusters, current, onSelect, open, onOpen, onAdd, onRemove,
+  clusters, current, onSelect, open, onOpen, onAdd, onRemove, onDisconnect, onConnect,
 }: {
   clusters: ClusterInfo[]; current: string; onSelect: (n: string) => void;
   open: boolean; onOpen: (o: boolean) => void;
   onAdd: () => void;
   onRemove: (n: string) => void;
+  onDisconnect: (n: string) => void;
+  onConnect: (n: string) => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useDismiss(ref, open, () => onOpen(false));
@@ -228,6 +278,8 @@ function ClusterPicker({
                 isCurrent={c.name === current}
                 onSelect={() => { onSelect(c.name); onOpen(false); }}
                 onRemove={() => onRemove(c.name)}
+                onDisconnect={() => onDisconnect(c.name)}
+                onConnect={() => onConnect(c.name)}
               />
             ))}
           </div>
@@ -250,14 +302,27 @@ function ClusterPicker({
 // call `useClusterColor(c.name)` per row without violating the rules-of-
 // hooks (a hook in the parent's `.map(...)` callback would be illegal).
 function ClusterRow({
-  info, isCurrent, onSelect, onRemove,
+  info, isCurrent, onSelect, onRemove, onDisconnect, onConnect,
 }: {
   info: ClusterInfo;
   isCurrent: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  onDisconnect: () => void;
+  onConnect: () => void;
 }) {
   const tint = useClusterColor(info.name);
+  // Three visible dot states:
+  //   • filled        — connected (the apiserver answered the last probe)
+  //   • outlined      — unreachable (apiserver didn't answer; usually a
+  //                     network blip or a bad kubeconfig)
+  //   • dashed border — paused (the user pressed Disconnect; intentional,
+  //                     not a failure)
+  const dotStyle: React.CSSProperties = info.connected
+    ? { background: tint.hsl }
+    : info.paused
+      ? { background: "transparent", border: `1px dashed ${tint.hsl}` }
+      : { background: "transparent", border: `1px solid ${tint.hsl}` };
   return (
     <div
       className={clsx(
@@ -270,20 +335,39 @@ function ClusterRow({
         className="flex items-center gap-2 flex-1 min-w-0 text-left"
         onClick={onSelect}
       >
-        <span
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{
-            background: info.connected ? tint.hsl : "transparent",
-            border: info.connected ? "none" : `1px solid ${tint.hsl}`,
-          }}
-        />
-        <span className="flex-1 text-left truncate">{info.name}</span>
-        <span className="text-fg-mute text-[10px]">{info.version || "—"}</span>
+        <span className="w-2 h-2 rounded-full shrink-0" style={dotStyle} />
+        <span className={clsx("flex-1 text-left truncate", info.paused && "text-fg-mute italic")}>
+          {info.name}
+        </span>
+        {info.paused
+          ? <span className="text-warn text-[9px] uppercase tracking-wider font-medium">paused</span>
+          : <span className="text-fg-mute text-[10px]">{info.version || "—"}</span>}
       </button>
+      {info.paused ? (
+        <button
+          type="button"
+          className="shrink-0 h-6 w-6 grid place-items-center rounded text-fg-mute opacity-0 group-hover:opacity-100 hover:text-ok hover:bg-ok/10"
+          title={`Reconnect ${info.name}`}
+          aria-label={`Reconnect ${info.name}`}
+          onClick={(e) => { e.stopPropagation(); onConnect(); }}
+        >
+          <PlugZap size={12} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="shrink-0 h-6 w-6 grid place-items-center rounded text-fg-mute opacity-0 group-hover:opacity-100 hover:text-warn hover:bg-warn/10"
+          title={`Disconnect ${info.name} (keeps it in the picker, stops every informer)`}
+          aria-label={`Disconnect ${info.name}`}
+          onClick={(e) => { e.stopPropagation(); onDisconnect(); }}
+        >
+          <Unplug size={12} />
+        </button>
+      )}
       <button
         type="button"
         className="shrink-0 h-6 w-6 grid place-items-center rounded text-fg-mute opacity-0 group-hover:opacity-100 hover:text-bad hover:bg-bad/10"
-        title={`Remove cluster ${info.name}`}
+        title={`Remove cluster ${info.name} (unregisters and deletes the kubeconfig)`}
         aria-label={`Remove cluster ${info.name}`}
         onClick={(e) => { e.stopPropagation(); onRemove(); }}
       >

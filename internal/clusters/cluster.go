@@ -3,6 +3,7 @@ package clusters
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -43,9 +44,22 @@ type Cluster struct {
 	rootCtx context.Context
 	cancel  context.CancelFunc
 	stopped atomic.Bool
+	// paused is the "soft disconnect" state: the cluster object stays in
+	// the Manager and its kubeconfig stays on disk, but no informers run,
+	// new subscribes / WS streams are rejected, and the connectivity probe
+	// idles. Resume() flips the bit back and the next subscribe rebuilds
+	// the per-GVR informers on demand. Used to give the user a "stop
+	// touching this cluster" toggle that's reversible without re-import.
+	paused atomic.Bool
 
 	mu sync.Mutex
 }
+
+// ErrClusterPaused is returned by Subscribe (and surfaced by handlers) when
+// the cluster has been disconnected via Pause(). The frontend treats this
+// the same as the "cluster gone" path — close the WebSocket, surface a
+// banner, stop the reconnect loop.
+var ErrClusterPaused = errors.New("cluster is disconnected")
 
 func newCluster(parent context.Context, name string, rc *rest.Config, logger *zap.Logger) (*Cluster, error) {
 	ctx, cancel := context.WithCancel(parent)
@@ -97,6 +111,12 @@ func (c *Cluster) probe() {
 	checked := false
 	lastErr := ""
 	check := func() {
+		// Skip the probe entirely while paused — we owe the user "no
+		// background touching" once they hit Disconnect, and a 15 s ping
+		// loop violates the contract just as visibly as an open informer.
+		if c.paused.Load() {
+			return
+		}
 		ctx, cancel := context.WithTimeout(c.rootCtx, 5*time.Second)
 		defer cancel()
 		v := &apiversion.Info{}
@@ -139,6 +159,7 @@ func (c *Cluster) probe() {
 
 func (c *Cluster) Name() string                                  { return c.name }
 func (c *Cluster) Connected() bool                               { return c.connected.Load() }
+func (c *Cluster) Paused() bool                                  { return c.paused.Load() }
 func (c *Cluster) RestConfig() *rest.Config                      { return c.restCfg }
 func (c *Cluster) Clientset() kubernetes.Interface               { return c.clientset }
 func (c *Cluster) Dynamic() dynamic.Interface                    { return c.dynamic }
@@ -164,6 +185,9 @@ func (c *Cluster) ResolveGVR(input string) (schema.GroupVersionResource, error) 
 // given GVR (and namespace, "" means cluster-wide). The returned stream must
 // be closed when the consumer goes away.
 func (c *Cluster) Subscribe(gvr schema.GroupVersionResource, namespace string) (*Stream, error) {
+	if c.paused.Load() {
+		return nil, ErrClusterPaused
+	}
 	return c.informerStore.subscribe(gvr, namespace)
 }
 
@@ -184,4 +208,27 @@ func (c *Cluster) Stop() {
 	}
 	c.cancel()
 	c.informerStore.stopAll()
+}
+
+// Pause is the soft inverse of Stop: tear down running informers, mark the
+// cluster as disconnected so the probe loop idles and Subscribe rejects
+// new requests, but keep the rest of the Cluster object intact so Resume
+// can flip the bit and rebuild informers on demand. Idempotent.
+func (c *Cluster) Pause() {
+	if c.paused.Swap(true) {
+		return
+	}
+	c.connected.Store(false)
+	c.informerStore.stopAll()
+	c.logger.Info("cluster paused", zap.String("server", c.restCfg.Host))
+}
+
+// Resume undoes Pause. The first Subscribe after Resume rebuilds whatever
+// informers the new subscribers ask for; we don't pre-warm anything because
+// the previous subscriber set may no longer be relevant. Idempotent.
+func (c *Cluster) Resume() {
+	if !c.paused.Swap(false) {
+		return
+	}
+	c.logger.Info("cluster resumed", zap.String("server", c.restCfg.Host))
 }

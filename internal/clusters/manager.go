@@ -190,7 +190,15 @@ type ClusterInfo struct {
 	Kubeconfig string `json:"kubeconfig,omitempty"`
 	Current    bool   `json:"current"`
 	Connected  bool   `json:"connected"`
-	Version    string `json:"version,omitempty"`
+	// Paused is true when the user clicked Disconnect — the cluster object
+	// stays in the Manager and the kubeconfig stays on disk, but no
+	// informers run and Subscribe / stream return ErrClusterPaused. The
+	// frontend uses this to render a "Reconnect" affordance instead of
+	// hammering the WebSocket and to soften the "offline" badge styling
+	// (paused is intentional, offline is "we tried and the apiserver said
+	// no").
+	Paused  bool   `json:"paused"`
+	Version string `json:"version,omitempty"`
 }
 
 func (m *Manager) List() []ClusterInfo {
@@ -209,6 +217,7 @@ func (m *Manager) List() []ClusterInfo {
 			Kubeconfig: m.kubeconfigPath(),
 			Current:    name == m.current,
 			Connected:  c.Connected(),
+			Paused:     c.Paused(),
 			Version:    c.Version(),
 		})
 	}
@@ -344,6 +353,34 @@ func (m *Manager) Remove(name string) error {
 		m.logger.Warn("removed cluster from manager but failed to clean up disk file",
 			zap.String("cluster", name), zap.Error(err))
 	}
+	return nil
+}
+
+// Disconnect tears down running informers for the named cluster and marks
+// it as paused. The cluster stays registered (its kubeconfig stays on
+// disk, the entry stays in the picker) so Connect() can re-enable it
+// without re-importing. Idempotent on an already-paused cluster.
+func (m *Manager) Disconnect(name string) error {
+	m.mu.RLock()
+	c, ok := m.clusters[name]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown cluster %q", name)
+	}
+	c.Pause()
+	return nil
+}
+
+// Connect is the inverse of Disconnect — flips the cluster back to active.
+// The next Subscribe / stream rebuilds informers on demand.
+func (m *Manager) Connect(name string) error {
+	m.mu.RLock()
+	c, ok := m.clusters[name]
+	m.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("unknown cluster %q", name)
+	}
+	c.Resume()
 	return nil
 }
 

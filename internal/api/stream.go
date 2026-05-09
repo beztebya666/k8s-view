@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -59,6 +60,17 @@ func (h *handlers) stream(w http.ResponseWriter, r *http.Request) {
 	c, err := h.cluster(r)
 	if err != nil {
 		h.writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	// Disconnected cluster — refuse the WebSocket upgrade outright. The
+	// frontend's ClusterStream treats a fast close before any open as a
+	// "cluster gone / paused" signal: it probes /clusters once, sees
+	// `paused: true`, declares the stream dead and stops the reconnect
+	// loop. 409 (Conflict) keeps this distinguishable in operator logs
+	// from "apiserver unreachable" (which would surface differently and
+	// IS retryable).
+	if c.Paused() {
+		h.writeError(w, r, http.StatusConflict, errors.New("cluster is disconnected"))
 		return
 	}
 

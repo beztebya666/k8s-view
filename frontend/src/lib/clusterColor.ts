@@ -19,7 +19,7 @@
 //     what makes "pick a hue in the badge popover and watch every chip /
 //     button / tab in the UI repaint instantly" actually work.
 
-import { useSyncExternalStore } from "react";
+import { useMemo } from "react";
 import { useApp } from "../stores/app";
 
 const SATURATION = 70;
@@ -67,21 +67,23 @@ function hueFor(name: string): number {
 }
 
 // useClusterColor — selector hook that pulls the cluster's persisted hue
-// override from the app store. We subscribe through useSyncExternalStore so
-// only the iconHue field gates re-renders (a flat `useApp((s) => …)` would
-// re-fire the consumer on every unrelated store mutation — selectedNamespace,
-// search input keystrokes, …, which is what made the per-cluster theming
-// "pick a colour" workflow look broken).
+// override from the app store. Uses zustand's built-in selector form so only
+// changes to *this cluster's* iconHue gate a re-render — typing in the
+// global search bar, switching namespace, opening a sidebar section, etc.
+// won't cascade through every cluster-tinted icon and make the popover
+// flicker / sidebar sections appear-and-disappear.
+//
+// The returned object is memoised against (name, hue) so identity-equality
+// downstream (React.memo children, useEffect deps) stays stable when nothing
+// about *this* cluster's colour actually moved.
 export function useClusterColor(name: string): ClusterColor {
-  const hue = useSyncExternalStore(
-    (cb) => useApp.subscribe(cb),
-    () => {
-      if (!name) return -1;
-      const settings = useApp.getState().clusterSettings[name];
-      const value = settings?.iconHue;
-      return typeof value === "number" ? value : -1;
-    },
-    () => -1, // SSR / initial — fall back to deterministic hue.
+  const hue = useApp((s) => {
+    if (!name) return -1;
+    const v = s.clusterSettings[name]?.iconHue;
+    return typeof v === "number" && v >= 0 && v < 360 ? Math.floor(v) : -1;
+  });
+  return useMemo(
+    () => clusterColor(name, hue >= 0 ? hue : undefined),
+    [name, hue],
   );
-  return clusterColor(name, hue >= 0 ? hue : undefined);
 }

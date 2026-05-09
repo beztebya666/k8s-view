@@ -165,6 +165,40 @@ func (h *handlers) selectCluster(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"current": name})
 }
 
+// disconnectCluster pauses the named cluster — running informers stop,
+// new subscribes / streams return ErrClusterPaused, the connectivity probe
+// idles. Idempotent. The cluster stays in the picker so a single click on
+// Connect re-enables it without re-importing.
+func (h *handlers) disconnectCluster(w http.ResponseWriter, r *http.Request) {
+	mgr, err := h.managerFor(r)
+	if err != nil {
+		h.writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	name := chi.URLParam(r, "name")
+	if err := mgr.Disconnect(name); err != nil {
+		h.writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"disconnected": name})
+}
+
+// connectCluster is the inverse of disconnect — flips the cluster back to
+// active. Idempotent. The next Subscribe rebuilds informers on demand.
+func (h *handlers) connectCluster(w http.ResponseWriter, r *http.Request) {
+	mgr, err := h.managerFor(r)
+	if err != nil {
+		h.writeError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	name := chi.URLParam(r, "name")
+	if err := mgr.Connect(name); err != nil {
+		h.writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"connected": name})
+}
+
 // importCluster accepts a kubeconfig YAML payload and registers each context
 // it contains as a Cluster. The YAML is also persisted to
 // ~/.k8s-view/imported/ so the cluster reappears on next startup.

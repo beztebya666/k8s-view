@@ -84,6 +84,8 @@ func NewRouter(d Deps) http.Handler {
 		r.Post("/clusters/import", h.importCluster)
 		r.Get("/clusters/scan", h.scanKubeconfigs)
 		r.Post("/clusters/{name}/select", h.selectCluster)
+		r.Post("/clusters/{name}/disconnect", h.disconnectCluster)
+		r.Post("/clusters/{name}/connect", h.connectCluster)
 		r.Delete("/clusters/{name}", h.removeCluster)
 
 		r.Route("/{cluster}", func(r chi.Router) {
