@@ -1,52 +1,242 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "k8s-view.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "k8s-view.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  strategy: {{- toYaml .Values.strategy | nindent 4 }}
   selector:
     matchLabels: {{- include "k8s-view.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      labels: {{- include "k8s-view.selectorLabels" . | nindent 8 }}
+      labels:
+        {{- include "k8s-view.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- $secretChecksum := "" }}
+      {{- if eq (include "k8s-view.shouldCreateSecret" .) "true" }}
+      {{- $secretChecksum = include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- end }}
+      {{- if or $secretChecksum .Values.podAnnotations }}
+      annotations:
+        {{- if $secretChecksum }}
+        # Force a rollout when the credentials Secret changes — without this
+        # the pod would keep stale env vars until something else (image tag,
+        # etc.) bumped the template hash.
+        checksum/credentials: {{ $secretChecksum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "k8s-view.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      dnsPolicy: {{ .Values.dnsPolicy }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig: {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.initContainers }}
+      initContainers: {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: k8s-view
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "k8s-view.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --in-cluster
-            - --listen=:8080
-            {{- if .Values.basicAuth.enabled }}
-            - --basic-auth-user={{ .Values.basicAuth.user }}
-            - --basic-auth-pass={{ .Values.basicAuth.password }}
+            - --listen={{ .Values.config.listen }}
+            - --log-level={{ .Values.config.logLevel }}
+            - --resync-seconds={{ .Values.config.resyncSeconds }}
+            - --allow-origins={{ .Values.config.allowOrigins }}
+            {{- with .Values.config.defaultCluster }}
+            - --default-cluster={{ . }}
+            {{- end }}
+            {{- if ne .Values.config.mode "all-in-one" }}
+            - --mode={{ .Values.config.mode }}
+            {{- with .Values.config.redisAddr }}
+            - --redis={{ . }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.auth.basicAuth.enabled }}
+            # basic-auth credentials are loaded from env (see env: below) so
+            # they don't sit on the process command line where `ps` would
+            # leak them.
             {{- end }}
             {{- range .Values.extraArgs }}
-            - {{ . }}
+            - {{ . | quote }}
             {{- end }}
           env:
-            {{- range .Values.env }}
-            - {{ toYaml . | nindent 14 | trim }}
+            {{- if .Values.auth.basicAuth.enabled }}
+            - name: K8SVIEW_BASIC_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "k8s-view.credentialsSecretName" .) .Values.auth.basicAuth.existingSecret }}
+                  key: basicAuthUser
+            - name: K8SVIEW_BASIC_AUTH_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "k8s-view.credentialsSecretName" .) .Values.auth.basicAuth.existingSecret }}
+                  key: basicAuthPassword
             {{- end }}
+            {{- if .Values.auth.oidc.enabled }}
+            - name: K8SVIEW_OIDC_ENABLED
+              value: "true"
+            {{- with .Values.auth.oidc.issuerUrl }}
+            - { name: K8SVIEW_OIDC_ISSUER, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.oidc.clientId }}
+            - { name: K8SVIEW_OIDC_CLIENT_ID, value: {{ . | quote }} }
+            {{- end }}
+            {{- if or .Values.auth.oidc.clientSecret .Values.auth.oidc.existingSecret }}
+            - name: K8SVIEW_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "k8s-view.credentialsSecretName" .) .Values.auth.oidc.existingSecret }}
+                  key: oidcClientSecret
+            {{- end }}
+            {{- with .Values.auth.oidc.redirectUri }}
+            - { name: K8SVIEW_OIDC_REDIRECT_URI, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.oidc.scopes }}
+            - { name: K8SVIEW_OIDC_SCOPES, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.oidc.allowedDomains }}
+            - { name: K8SVIEW_OIDC_ALLOWED_DOMAINS, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.oidc.adminGroupClaim }}
+            - { name: K8SVIEW_OIDC_ADMIN_GROUP, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
+            {{- if .Values.auth.ldap.enabled }}
+            - name: K8SVIEW_LDAP_ENABLED
+              value: "true"
+            {{- with .Values.auth.ldap.url }}
+            - { name: K8SVIEW_LDAP_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.ldap.bindDn }}
+            - { name: K8SVIEW_LDAP_BIND_DN, value: {{ . | quote }} }
+            {{- end }}
+            {{- if or .Values.auth.ldap.bindPassword .Values.auth.ldap.existingSecret }}
+            - name: K8SVIEW_LDAP_BIND_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "k8s-view.credentialsSecretName" .) .Values.auth.ldap.existingSecret }}
+                  key: ldapBindPassword
+            {{- end }}
+            {{- with .Values.auth.ldap.userSearchBase }}
+            - { name: K8SVIEW_LDAP_USER_SEARCH_BASE, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.ldap.userFilter }}
+            - { name: K8SVIEW_LDAP_USER_FILTER, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.ldap.groupSearchBase }}
+            - { name: K8SVIEW_LDAP_GROUP_SEARCH_BASE, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.ldap.groupFilter }}
+            - { name: K8SVIEW_LDAP_GROUP_FILTER, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.ldap.adminGroupDn }}
+            - { name: K8SVIEW_LDAP_ADMIN_GROUP_DN, value: {{ . | quote }} }
+            {{- end }}
+            {{- if .Values.auth.ldap.startTls }}
+            - { name: K8SVIEW_LDAP_STARTTLS, value: "true" }
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom: {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+            {{- with .Values.extraPorts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.probes.startup.enabled }}
+          startupProbe:
+            httpGet: { path: {{ .Values.probes.startup.path }}, port: http }
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          {{- end }}
+          {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
-            httpGet: { path: /api/v1/healthz, port: http }
-            initialDelaySeconds: 2
-            periodSeconds: 10
+            httpGet: { path: {{ .Values.probes.readiness.path }}, port: http }
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+            successThreshold: {{ .Values.probes.readiness.successThreshold }}
+          {{- end }}
+          {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
-            httpGet: { path: /api/v1/healthz, port: http }
-            initialDelaySeconds: 15
-            periodSeconds: 30
+            httpGet: { path: {{ .Values.probes.liveness.path }}, port: http }
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+            successThreshold: {{ .Values.probes.liveness.successThreshold }}
+          {{- end }}
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
-      nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
-      affinity: {{- toYaml .Values.affinity | nindent 8 }}
-      tolerations: {{- toYaml .Values.tolerations | nindent 8 }}
+          volumeMounts:
+            # /tmp is writable when readOnlyRootFilesystem=true otherwise
+            # multipart upload (kubeconfig import) and zap stderr crash on
+            # the first write.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+              {{- with .Values.persistence.subPath }}
+              subPath: {{ . }}
+              {{- end }}
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- with .Values.sidecars }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "k8s-view.pvcName" . }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- toYaml . | nindent 8 }}
+      {{- end }}

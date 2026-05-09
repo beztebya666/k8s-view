@@ -1,11 +1,23 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "k8s-view.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "k8s-view.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   type: {{ .Values.service.type }}
+  # ClientIP affinity is on by default — every browser tab keeps a
+  # long-lived WebSocket. Round-robining requests from the same client
+  # across replicas would split watch traffic and double-bill the
+  # apiserver. Set sessionAffinity to "None" if you front the dashboard
+  # with an L7 proxy that already handles stickiness.
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- if eq .Values.service.sessionAffinity "ClientIP" }}
+  sessionAffinityConfig: {{- toYaml .Values.service.sessionAffinityConfig | nindent 4 }}
+  {{- end }}
   ports:
     - port: {{ .Values.service.port }}
       targetPort: http

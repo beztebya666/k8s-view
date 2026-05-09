@@ -1,0 +1,90 @@
+k8s-view {{ .Chart.AppVersion }} (chart {{ .Chart.Version }}) is installed.
+
+▸ Open the dashboard
+
+  {{- if .Values.ingress.enabled }}
+  {{- range .Values.ingress.hosts }}
+  https://{{ .host }}{{ (index .paths 0).path | default "/" }}
+  {{- end }}
+  {{- else if eq .Values.service.type "LoadBalancer" }}
+  Wait for the external IP to be allocated:
+
+      kubectl --namespace {{ .Release.Namespace }} get svc {{ include "k8s-view.fullname" . }} \
+        -w -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+
+  Then open  http://<external-ip>:{{ .Values.service.port }}/
+  {{- else if eq .Values.service.type "NodePort" }}
+  Find the node port and pick any cluster node IP:
+
+      kubectl --namespace {{ .Release.Namespace }} get svc {{ include "k8s-view.fullname" . }} \
+        -o jsonpath='{.spec.ports[0].nodePort}'
+  {{- else }}
+  Port-forward in a terminal:
+
+      kubectl --namespace {{ .Release.Namespace }} port-forward \
+        svc/{{ include "k8s-view.fullname" . }} 8080:{{ .Values.service.port }}
+
+  Then open  http://localhost:8080/
+  {{- end }}
+
+▸ First-visit identity
+
+  k8s-view issues a per-device cookie (kv_device) on first load. Two
+  browsers / devices keep their own kubeconfig imports and preferences
+  without any login wall. To restore a device on another browser, paste
+  the device ID from Settings → "Device" into the matching field.
+
+{{- if .Values.auth.basicAuth.enabled }}
+
+▸ Basic-auth is enabled
+
+  user:     {{ .Values.auth.basicAuth.user | default "(see Secret)" }}
+  password: stored in Secret/{{ default (include "k8s-view.credentialsSecretName" .) .Values.auth.basicAuth.existingSecret }}
+
+  Read it back any time with:
+
+      kubectl --namespace {{ .Release.Namespace }} get secret \
+        {{ default (include "k8s-view.credentialsSecretName" .) .Values.auth.basicAuth.existingSecret }} \
+        -o jsonpath='{.data.basicAuthPassword}' | base64 -d
+{{- end }}
+
+{{- if eq .Values.rbac.scope "Namespace" }}
+
+▸ Namespace-scoped RBAC
+
+  This release was bound with a Role/RoleBinding inside namespace
+  "{{ .Release.Namespace }}". Cluster-scoped resources (Nodes, PVs,
+  CRDs, etc.) won't appear in the UI — that's expected.
+{{- end }}
+
+{{- if and (not .Values.persistence.enabled) (eq .Values.config.mode "all-in-one") }}
+
+▸ Imported kubeconfigs are NOT persisted
+
+  Without `persistence.enabled=true`, every kubeconfig uploaded through
+  the "Add cluster from kubeconfig…" flow is lost on pod restart. Enable
+  the PVC if your team relies on imports — see values.yaml `persistence`.
+{{- end }}
+
+{{- if and (gt (.Values.replicaCount | int) 1) (eq .Values.config.mode "all-in-one") }}
+
+▸ Multi-replica all-in-one
+
+  You're running {{ .Values.replicaCount }} replicas in all-in-one mode.
+  Each replica owns its own informer pool, so the apiserver sees
+  N× the watch traffic. For real horizontal scale switch to the
+  api / worker split:
+
+      config:
+        mode: api
+        redisAddr: my-redis:6379
+
+  See README "Distributed mode".
+{{- end }}
+
+▸ Useful commands
+
+  kubectl --namespace {{ .Release.Namespace }} get pods -l app.kubernetes.io/name={{ include "k8s-view.name" . }}
+  kubectl --namespace {{ .Release.Namespace }} logs -f deploy/{{ include "k8s-view.fullname" . }}
+
+Source:  {{ .Chart.Home }}

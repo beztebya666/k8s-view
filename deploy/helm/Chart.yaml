@@ -1,16 +1,57 @@
 apiVersion: v2
 name: k8s-view
-description: The fastest, prettiest Kubernetes UI.
+description: |
+  k8s-view — a streaming, multi-cluster Kubernetes dashboard.
+  Single Go binary, MessagePack delta WebSocket, side-panel inline actions
+  (scale / restart / rollout history & rollback / describe / exec / logs /
+  port-forward), Prometheus + metrics-server charts. Production-grade
+  defaults, hardened pod, no telemetry.
 type: application
-version: 0.3.0
+# Chart version is bumped on every chart change.
+# appVersion tracks the binary release.
+version: 0.3.1
 appVersion: "0.3.0"
-home: https://github.com/k8s-view/k8s-view
+kubeVersion: ">=1.20.0-0"
+home: https://github.com/beztebya666/k8s-view
 sources:
-  - https://github.com/k8s-view/k8s-view
+  - https://github.com/beztebya666/k8s-view
+icon: https://raw.githubusercontent.com/beztebya666/k8s-view/main/frontend/public/favicon.svg
 keywords:
   - kubernetes
+  - k8s
   - dashboard
   - ui
+  - web-ui
+  - kubernetes-dashboard
+  - kubernetes-ui
+  - multi-cluster
+  - rollback
+  - rollout
+  - prometheus
+  - metrics-server
+  - kubectl
   - observability
+  - devops
+  - cloud-native
+  - self-hosted
 maintainers:
-  - name: k8s-view authors
+  - name: beztebya666
+    url: https://github.com/beztebya666
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/changes: |
+    - kind: added
+      description: Deployment rollout history & one-click rollback action
+    - kind: added
+      description: Sortable Related-objects panel (Name / Status / Age)
+    - kind: added
+      description: Per-device session model (kv_device cookie) + OIDC/LDAP provider hooks
+    - kind: added
+      description: Helm chart — HPA, PDB, NetworkPolicy, PVC for imported kubeconfigs, Secret for credentials
+    - kind: added
+      description: Helm chart — WebSocket-friendly Service/Ingress (sticky sessions, long-lived timeouts)
+    - kind: changed
+      description: metrics-server fallback now aggregates across every pod of a Deployment / RS / StatefulSet / DaemonSet / Job
+    - kind: fixed
+      description: Workload metric kebab popover stayed open while the bottom-pane log tail kept appending lines

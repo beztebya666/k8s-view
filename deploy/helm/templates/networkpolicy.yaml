@@ -1,0 +1,48 @@
+{{- if .Values.networkPolicy.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "k8s-view.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "k8s-view.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "k8s-view.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- if .Values.networkPolicy.ingress }}
+    {{- toYaml .Values.networkPolicy.ingress | nindent 4 }}
+    {{- else }}
+    # Default — allow ingress from anywhere on the dashboard's port. The
+    # dashboard is end-user-facing; lock down by overriding networkPolicy.ingress
+    # with namespaceSelector / podSelector blocks if you front it with an
+    # internal LB.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.service.targetPort }}
+    {{- end }}
+  egress:
+    # DNS — every pod needs cluster DNS to reach the apiserver service name.
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    # kube-apiserver — the dashboard's reason for living. Allow egress to
+    # the cluster API on the standard ports.
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Anything extra (external OIDC issuer, cluster Prometheus, etc).
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

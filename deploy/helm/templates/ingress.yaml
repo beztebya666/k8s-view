@@ -2,7 +2,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ .Release.Name }}
+  name: {{ include "k8s-view.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels: {{- include "k8s-view.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
@@ -10,7 +10,7 @@ metadata:
   {{- end }}
 spec:
   {{- with .Values.ingress.className }}
-  ingressClassName: {{ . }}
+  ingressClassName: {{ . | quote }}
   {{- end }}
   {{- with .Values.ingress.tls }}
   tls: {{- toYaml . | nindent 4 }}
@@ -21,11 +21,11 @@ spec:
       http:
         paths:
           {{- range .paths }}
-          - path: {{ . }}
-            pathType: Prefix
+          - path: {{ .path | default . }}
+            pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ $.Release.Name }}
+                name: {{ include "k8s-view.fullname" $ }}
                 port:
                   number: {{ $.Values.service.port }}
           {{- end }}

@@ -1,11 +1,182 @@
-image:
-  repository: ghcr.io/k8s-view/k8s-view
-  tag: "0.3.0"
-  pullPolicy: IfNotPresent
+# -- Default values for the k8s-view chart.
+# Every option below is documented inline. The chart is "production-grade by
+# default": secure pod context, conservative resource requests, sticky-session
+# Service for WebSocket fan-out, and explicit knobs for HPA / PDB /
+# NetworkPolicy / persistence — all opt-in but ready to flip.
 
+## ---------------------------------------------------------------------------
+## Image
+## ---------------------------------------------------------------------------
+image:
+  repository: ghcr.io/beztebya666/k8s-view
+  # -- Image tag. Defaults to .Chart.AppVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+  # -- Optional digest pin (overrides tag when set).
+  digest: ""
+
+# -- imagePullSecrets passed straight to the pod spec.
+imagePullSecrets: []
+#  - name: ghcr-pull-secret
+
+## ---------------------------------------------------------------------------
+## Naming / labels
+## ---------------------------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+# -- Extra labels applied to every chart-managed object.
+commonLabels: {}
+# -- Extra annotations applied to every chart-managed object.
+commonAnnotations: {}
+
+## ---------------------------------------------------------------------------
+## Workload shape
+## ---------------------------------------------------------------------------
 replicaCount: 1
 revisionHistoryLimit: 3
 
+# -- Rollout strategy. RollingUpdate is fine for the dashboard; Recreate is
+# safer when paired with a single-writer PVC for imported kubeconfigs.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+# -- Annotations and labels on the *pod* (not the Deployment).
+podAnnotations: {}
+podLabels: {}
+
+# -- Annotations on the Deployment object itself.
+deploymentAnnotations: {}
+
+# -- terminationGracePeriodSeconds. WebSocket / log / exec streams shut down
+# in <10 s on SIGTERM (handlers cancel their context). 30 is safe.
+terminationGracePeriodSeconds: 30
+
+priorityClassName: ""
+dnsPolicy: ClusterFirst
+dnsConfig: {}
+
+## ---------------------------------------------------------------------------
+## Application configuration
+## ---------------------------------------------------------------------------
+config:
+  # -- Listen address inside the container.
+  listen: ":8080"
+  # -- Log verbosity: debug | info | warn | error
+  logLevel: "info"
+  # -- Informer resync period in seconds. 0 disables periodic resync (only
+  # apiserver deltas are forwarded — recommended).
+  resyncSeconds: 0
+  # -- Cluster name shown by default on first load. Empty = current-context.
+  defaultCluster: ""
+  # -- CORS allow-list (comma-separated). "*" disables CORS enforcement.
+  allowOrigins: "*"
+  # -- Distributed mode: all-in-one | api | worker. See README.
+  mode: "all-in-one"
+  # -- Redis address (only when mode != all-in-one).
+  redisAddr: ""
+
+## ---------------------------------------------------------------------------
+## Authentication
+## ---------------------------------------------------------------------------
+auth:
+  # ---- HTTP basic-auth ----------------------------------------------------
+  basicAuth:
+    enabled: false
+    user: ""
+    password: ""
+    # -- Reference an existing Secret instead of inlining credentials. The
+    # Secret must hold "user" and "password" keys.
+    existingSecret: ""
+
+  # ---- OIDC (provider stub — see README) ----------------------------------
+  # When enabled, env vars are exported into the pod. Real OIDC handshake is
+  # a "phase 2" feature in the binary; the chart wiring is in place so the
+  # rollout is a one-flag flip.
+  oidc:
+    enabled: false
+    issuerUrl: ""
+    clientId: ""
+    # Secret value: prefer existingSecret to keep clientSecret out of values.
+    clientSecret: ""
+    existingSecret: ""
+    redirectUri: ""
+    scopes: "openid,profile,email"
+    allowedDomains: ""        # CSV of email domains to accept
+    adminGroupClaim: ""
+
+  # ---- LDAP (provider stub — see README) ----------------------------------
+  ldap:
+    enabled: false
+    url: ""                    # ldaps://ldap.example.com:636
+    bindDn: ""
+    bindPassword: ""
+    existingSecret: ""         # holds bindPassword
+    userSearchBase: ""
+    userFilter: ""             # e.g. (uid=%s) or (sAMAccountName=%s)
+    groupSearchBase: ""
+    groupFilter: ""
+    adminGroupDn: ""
+    startTls: false
+
+## ---------------------------------------------------------------------------
+## Persistence
+## ---------------------------------------------------------------------------
+# Imported kubeconfigs land under /home/app/.k8s-view/imported by default.
+# Without persistence they vanish on every pod restart. For a single-replica
+# install enable a PVC; for multi-replica you should front it with `--mode=api`
+# + Redis instead and leave imports stateless.
+persistence:
+  enabled: false
+  # -- existingClaim short-circuits PVC creation and just mounts.
+  existingClaim: ""
+  storageClass: ""             # "" = default, "-" = none
+  accessMode: ReadWriteOnce
+  size: 1Gi
+  annotations: {}
+  # -- Mount path inside the container. The binary writes imports here as
+  # configured by --kubeconfig / KUBECONFIG and the import handler.
+  mountPath: /home/app/.k8s-view
+  # -- subPath inside the volume (lets you reuse a shared PVC).
+  subPath: ""
+
+# -- extraVolumes / extraVolumeMounts pass straight through to the pod.
+extraVolumes: []
+extraVolumeMounts: []
+
+## ---------------------------------------------------------------------------
+## Probes / lifecycle
+## ---------------------------------------------------------------------------
+probes:
+  readiness:
+    enabled: true
+    path: /api/v1/healthz
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+    successThreshold: 1
+  liveness:
+    enabled: true
+    path: /api/v1/healthz
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+  # -- Optional startup probe. Useful on slow nodes where the cluster
+  # registry needs >30 s to enumerate imported kubeconfigs.
+  startup:
+    enabled: false
+    path: /api/v1/healthz
+    periodSeconds: 5
+    failureThreshold: 30
+
+## ---------------------------------------------------------------------------
+## Security
+## ---------------------------------------------------------------------------
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
@@ -20,19 +191,48 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
+## ---------------------------------------------------------------------------
+## Service / Ingress
+## ---------------------------------------------------------------------------
 service:
   type: ClusterIP
   port: 80
+  # -- Container target port. Matches config.listen above (without the colon).
+  targetPort: 8080
+  annotations: {}
+  # -- Sticky sessions matter when replicaCount > 1 — every browser tab
+  # keeps a long-lived WebSocket; round-robining them across replicas would
+  # split watch traffic and double-bill the apiserver.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
 
 ingress:
   enabled: false
   className: ""
-  annotations: {}
+  # -- WebSocket-friendly defaults. Long-lived connections need read/send
+  # timeouts well above the proxy's typical 60 s default. Add or replace
+  # entries for your specific controller.
+  annotations:
+    # nginx-ingress
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # uncomment when terminating TLS at the ingress
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
   hosts:
     - host: k8s-view.example.com
-      paths: ["/"]
+      paths:
+        - path: /
+          pathType: Prefix
   tls: []
+  # - secretName: k8s-view-tls
+  #   hosts:
+  #     - k8s-view.example.com
 
+## ---------------------------------------------------------------------------
+## Resources
+## ---------------------------------------------------------------------------
 resources:
   requests:
     cpu: 100m
@@ -41,10 +241,50 @@ resources:
     cpu: 1000m
     memory: 1Gi
 
-# Run with the pod's ServiceAccount and the bundled cluster-admin ClusterRole.
-# Override `rbac.rules` if you want to limit what the UI can do.
+## ---------------------------------------------------------------------------
+## Autoscaling
+## ---------------------------------------------------------------------------
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  behavior: {}
+
+## ---------------------------------------------------------------------------
+## Disruption budget
+## ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: ""
+
+## ---------------------------------------------------------------------------
+## Network policy
+## ---------------------------------------------------------------------------
+# When enabled the chart writes a NetworkPolicy that:
+#   - allows ingress from anywhere (the dashboard is end-user-facing)
+#   - allows egress to the kube-apiserver, DNS, and (optionally) Prometheus
+networkPolicy:
+  enabled: false
+  # Restrict ingress sources by namespace / pod selector if you front the
+  # dashboard with an internal LB or auth proxy.
+  ingress: []
+  # Extra egress targets (e.g. external OIDC provider).
+  extraEgress: []
+
+## ---------------------------------------------------------------------------
+## RBAC
+## ---------------------------------------------------------------------------
+# By default the chart binds a permissive ClusterRole — the dashboard is
+# meant to be a kubectl replacement. For read-only or namespace-scoped
+# installs override `rules` (see README "RBAC" section).
 rbac:
   create: true
+  # -- "Cluster" creates a ClusterRoleBinding (recommended), "Namespace"
+  # creates a RoleBinding to the release namespace only.
+  scope: Cluster
   rules:
     - apiGroups: ["*"]
       resources: ["*"]
@@ -55,16 +295,29 @@ rbac:
 serviceAccount:
   create: true
   name: ""
+  annotations: {}
+  automountServiceAccountToken: true
 
-env: []
-extraArgs: []
-
-# Optional HTTP basic-auth in front of the UI.
-basicAuth:
-  enabled: false
-  user: ""
-  password: ""
-
+## ---------------------------------------------------------------------------
+## Scheduling
+## ---------------------------------------------------------------------------
 nodeSelector: {}
 tolerations: []
 affinity: {}
+topologySpreadConstraints: []
+
+## ---------------------------------------------------------------------------
+## Extras (escape hatch — appended verbatim to the container)
+## ---------------------------------------------------------------------------
+# -- Extra raw CLI flags appended after the chart-built ones.
+extraArgs: []
+# -- Extra environment variables (list of {name, value} or {name, valueFrom}).
+extraEnv: []
+# -- Extra envFrom sources.
+extraEnvFrom: []
+# -- Extra container ports (in addition to "http").
+extraPorts: []
+# -- Sidecar containers.
+sidecars: []
+# -- Init containers.
+initContainers: []
