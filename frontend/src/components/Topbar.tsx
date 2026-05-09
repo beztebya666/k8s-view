@@ -92,37 +92,35 @@ export function Topbar() {
           setAddOpen(true);
         }}
         onDisconnect={async (name) => {
+          // Optimistic UI: navigate off the cluster's route and tear down
+          // local state BEFORE awaiting the API call. Doing the await
+          // first leaves the user staring at a stale (or worse, blanked-
+          // out) ClusterShell for a few hundred ms — the shell's
+          // route-guard sees the just-paused cluster and returns null,
+          // and React-Router doesn't repaint until navigate("/") fires
+          // *after* the await. The result is the "I disconnected and
+          // landed in pure black" complaint. Doing it the other way:
+          //   1. navigate("/", replace) — unmounts ClusterShell now
+          //   2. destroyClusterStream / closeForCluster / bottom-pane —
+          //      no chance for a re-render to resurrect a session
+          //   3. THEN api.disconnectCluster + invalidate ["clusters"]
+          //      so the picker reflects the new state
+          //   4. on failure, surface a toast and let the next refetch
+          //      reconcile (we already navigated; the worst that
+          //      happens is the user sees the home shell and clicks
+          //      Connect to retry).
+          if (cluster === name) navigate("/", { replace: true });
+          destroyClusterStream(name);
+          useTabs.getState().closeForCluster(name);
+          bottom.closeForCluster(name);
           try {
             await api.disconnectCluster(name);
-            // Hard disconnect — tear EVERYTHING down for this cluster so
-            // the user can't keep poking around through cached views:
-            //   1. WebSocket stream pool (stops the live deltas)
-            //   2. Every top tab pinned to this cluster (Pods, Deploys,
-            //      detail panels — anything that would resurrect the
-            //      stream by re-mounting useResourceList)
-            //   3. Every bottom-pane session for this cluster (logs, exec,
-            //      attach, port-forward, YAML edit, Create) — these hold
-            //      their own long-lived WebSockets and would otherwise
-            //      stay alive after Disconnect
-            //   4. Per-cluster query cache (namespaces, events, …) so the
-            //      next page mount doesn't render stale data for one
-            //      frame before the new fetch reports the disconnected
-            //      state
-            //   5. If the active route was on this cluster, bounce to "/"
-            //      — the home screen renders the cluster picker and not
-            //      a half-broken Pods page
-            destroyClusterStream(name);
-            useTabs.getState().closeForCluster(name);
-            bottom.closeForCluster(name);
             await queryClient.removeQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey.includes(name) });
             await queryClient.invalidateQueries({ queryKey: ["clusters"] });
-            if (cluster === name) {
-              useApp.getState().setCluster("");
-              navigate("/");
-            }
             notify_.info(`Disconnected ${name}`, "Click Connect to resume.");
           } catch (e: any) {
             notify_.bad("Disconnect failed", e?.message ?? String(e));
+            await queryClient.invalidateQueries({ queryKey: ["clusters"] });
           }
         }}
         onConnect={async (name) => {

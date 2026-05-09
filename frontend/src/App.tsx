@@ -320,15 +320,18 @@ function ClusterShell() {
   // a copy-pasted URL, or a sidebar click that bypassed the picker would
   // mount the cluster shell and silently re-attach every informer — which
   // is exactly the "auto-connect on visit" behaviour the user complained
-  // about. We yank back to the home shell and let them click Connect
-  // explicitly. The query refetches on every interaction so the bounce is
-  // immediate even if the paused state landed mid-navigation.
+  // about.
+  //
+  // Two important detail: we redirect synchronously with <Navigate>, NOT
+  // by returning null and queuing the route change in a useEffect. The
+  // useEffect path makes the screen go pure black for one paint while
+  // the effect dispatches navigate("/") — that's the "I disconnected and
+  // landed in pure black" complaint. <Navigate replace> swaps the route
+  // inside React-Router's reducer in the same render, so the user goes
+  // straight to the home shell with no intermediate blank frame.
   const { data: clusters } = useQuery({ queryKey: ["clusters"], queryFn: api.clusters });
   const info = clusters?.find((c) => c.name === cluster);
   const blocked = !!cluster && (info ? info.paused : clusters !== undefined);
-  useEffect(() => {
-    if (blocked) navigate("/", { replace: true });
-  }, [blocked, navigate]);
 
   useTabsRouterSync();
 
@@ -336,7 +339,7 @@ function ClusterShell() {
     if (cluster && !blocked) setCluster(cluster);
   }, [cluster, blocked, setCluster]);
 
-  if (blocked) return null;
+  if (blocked) return <Navigate to="/" replace />;
 
   // Track current page per cluster so a later cluster-switch lands the
   // user back where they were. We deliberately ignore detail-route
