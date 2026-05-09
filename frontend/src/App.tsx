@@ -51,11 +51,19 @@ export default function App() {
   const setCluster = useApp((s) => s.setCluster);
   const theme = useApp((s) => s.theme);
 
-  // Pick the default cluster on first load.
+  // Pick the default cluster on first load. Only picks an active
+  // (non-paused) cluster — otherwise after a Disconnect the App-level
+  // sweep clears `cluster` to "" and this effect would immediately
+  // re-elect the same disconnected cluster, racing forever and putting
+  // the user back inside the very cluster they just disconnected from.
+  // When every cluster is paused we leave `cluster` empty; HomeShell
+  // renders the "All your clusters are disconnected" message.
   useEffect(() => {
     if (!clusters || clusters.length === 0) return;
-    if (cluster && clusters.find((c) => c.name === cluster)) return;
-    const current = clusters.find((c) => c.current) ?? clusters[0];
+    if (cluster && clusters.find((c) => c.name === cluster && !c.paused)) return;
+    const current = clusters.find((c) => c.current && !c.paused)
+                 ?? clusters.find((c) => !c.paused);
+    if (!current) return;
     setCluster(current.name);
   }, [clusters, cluster, setCluster]);
 
@@ -121,7 +129,13 @@ export default function App() {
   }, []);
 
   const showClusterImport = !isLoading && (clustersFailed || clusters?.length === 0);
-  const waitingForCluster = isLoading || (!clusters && !clustersFailed) || (!showClusterImport && !cluster);
+  // We deliberately DON'T gate the boot screen on `!cluster` any more —
+  // an empty active cluster is the legitimate "Disconnected, sitting on
+  // the home shell" state (HomeShell handles it). Treating it as "still
+  // waiting" left the user staring at the loading spinner forever after
+  // hitting Disconnect; we'd already wiped cluster="" but the boot
+  // screen's gate kept firing.
+  const waitingForCluster = isLoading || (!clusters && !clustersFailed);
 
   if (waitingForCluster || showClusterImport) {
     return (
