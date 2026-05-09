@@ -353,16 +353,22 @@ function ClusterShell() {
     if (cluster && !blocked) setCluster(cluster);
   }, [cluster, blocked, setCluster]);
 
-  if (blocked) return <Navigate to="/" replace />;
-
   // Track current page per cluster so a later cluster-switch lands the
   // user back where they were. We deliberately ignore detail-route
   // segments (`resource/...`, `pods/.../logs`) — those are deep links the
   // user reaches *from* a list page, and overwriting the remembered list
   // page with the deep link would teleport them back to the deep link
   // every time they come back to the cluster.
+  //
+  // IMPORTANT: this hook (and every other one in this component) MUST be
+  // called before the `blocked` early return. Putting it after the
+  // return is a rules-of-hooks violation — the first render sees blocked
+  // = false (clusters still loading), all hooks run; the next render
+  // gets paused = true, returns early, and React throws "Rendered fewer
+  // hooks than expected." That's what made the screen blow up after
+  // Disconnect with the boundary's stack trace pointing at renderRootSync.
   useEffect(() => {
-    if (!cluster) return;
+    if (!cluster || blocked) return;
     const parts = location.pathname.split("/").filter(Boolean);
     if (parts.length < 2) return;
     if (decodeURIComponent(parts[0]) !== cluster) return;
@@ -370,7 +376,9 @@ function ClusterShell() {
     if (!page || page === "resource" || page === "pods") return;
     if (lastPage[cluster] === page) return;
     setLastPage(cluster, page);
-  }, [location.pathname, cluster, lastPage, setLastPage]);
+  }, [location.pathname, cluster, blocked, lastPage, setLastPage]);
+
+  if (blocked) return <Navigate to="/" replace />;
 
   const startSidebarResize = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
