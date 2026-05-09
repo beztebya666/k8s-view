@@ -92,24 +92,29 @@ export function Topbar() {
           setAddOpen(true);
         }}
         onDisconnect={async (name) => {
-          // Optimistic UI: navigate off the cluster's route and tear down
-          // local state BEFORE awaiting the API call. Doing the await
-          // first leaves the user staring at a stale (or worse, blanked-
-          // out) ClusterShell for a few hundred ms — the shell's
-          // route-guard sees the just-paused cluster and returns null,
-          // and React-Router doesn't repaint until navigate("/") fires
-          // *after* the await. The result is the "I disconnected and
-          // landed in pure black" complaint. Doing it the other way:
-          //   1. navigate("/", replace) — unmounts ClusterShell now
-          //   2. destroyClusterStream / closeForCluster / bottom-pane —
-          //      no chance for a re-render to resurrect a session
-          //   3. THEN api.disconnectCluster + invalidate ["clusters"]
-          //      so the picker reflects the new state
-          //   4. on failure, surface a toast and let the next refetch
-          //      reconcile (we already navigated; the worst that
-          //      happens is the user sees the home shell and clicks
-          //      Connect to retry).
-          if (cluster === name) navigate("/", { replace: true });
+          // Optimistic UI sequence — order matters to avoid the
+          // ClusterShell→RootRedirect→ClusterShell flicker:
+          //
+          //   a) setCluster("") FIRST. Without this, navigate("/") below
+          //      lands on RootRedirect, which still sees the stale
+          //      clusters cache (paused=false because invalidate hasn't
+          //      run yet) and redirects right back to /<cluster>/overview.
+          //      ClusterShell remounts; the next refetch reports paused;
+          //      its guard fires <Navigate to="/">; ClusterShell unmounts
+          //      again. Two mount cycles = the millisecond flicker the
+          //      user sees on Disconnect.
+          //   b) navigate("/", replace) — switches the route in the same
+          //      reducer pass, no intermediate frame.
+          //   c) Local cleanup (stream pool, top tabs, bottom pane).
+          //   d) THEN the network call + cache invalidation.
+          //
+          // Failure path: the navigate has already happened, so the user
+          // is sitting on the home shell. We surface a toast and let the
+          // subsequent refetch reconcile state.
+          if (cluster === name) {
+            useApp.getState().setCluster("");
+            navigate("/", { replace: true });
+          }
           destroyClusterStream(name);
           useTabs.getState().closeForCluster(name);
           bottom.closeForCluster(name);
