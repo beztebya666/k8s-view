@@ -51,21 +51,16 @@ export default function App() {
   const setCluster = useApp((s) => s.setCluster);
   const theme = useApp((s) => s.theme);
 
-  // Pick the default cluster on first load. Only picks an active
-  // (non-paused) cluster — otherwise after a Disconnect the App-level
-  // sweep clears `cluster` to "" and this effect would immediately
-  // re-elect the same disconnected cluster, racing forever and putting
-  // the user back inside the very cluster they just disconnected from.
-  // When every cluster is paused we leave `cluster` empty; HomeShell
-  // renders the "All your clusters are disconnected" message.
-  useEffect(() => {
-    if (!clusters || clusters.length === 0) return;
-    if (cluster && clusters.find((c) => c.name === cluster && !c.paused)) return;
-    const current = clusters.find((c) => c.current && !c.paused)
-                 ?? clusters.find((c) => !c.paused);
-    if (!current) return;
-    setCluster(current.name);
-  }, [clusters, cluster, setCluster]);
+  // No auto-elect of a default cluster. Lens-style "you start on the
+  // home shell, pick a cluster yourself" is what we want — auto-elect
+  // fights every code path that legitimately leaves cluster="" (closing
+  // the last tab, Disconnect, Remove). Each time the user dropped the
+  // active pointer, this effect would re-pick the first non-paused
+  // cluster, useTabsRouterSync would synthesise a fresh tab from the
+  // resulting route change, and the user couldn't reach the home shell
+  // by closing tabs at all. The picker / sidebar already covers the
+  // "I want into this cluster" path; an automatic election was just
+  // adding magic on top.
 
   // Global stale-tab + stale-stream sweeper. A tab is "stale" when its
   // cluster is missing from the picker (removed elsewhere, SSO scope
