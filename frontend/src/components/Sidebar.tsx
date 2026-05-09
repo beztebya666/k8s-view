@@ -6,6 +6,8 @@ import { ChevronDown, ChevronRight, FileUp, Folder, Plus, Search, Star, Terminal
 import { api, type ClusterInfo } from "../lib/api";
 import { useApp } from "../stores/app";
 import { useTabs } from "../stores/tabs";
+import { notify_ } from "../lib/notifications";
+import { getClusterStream } from "../lib/stream";
 import { SECTIONS, type NavItem, type NavSection } from "../nav/sections";
 import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { AddClusterModal } from "./AddClusterModal";
@@ -113,6 +115,24 @@ export function Sidebar({ onNavigate }: { onNavigate: (to: string) => void }) {
               route={route}
               onToggleSection={(label) => toggleSection(cluster.name, label)}
               onOpenRoute={openRoute}
+              onConnect={async (name) => {
+                try {
+                  await api.connectCluster(name);
+                  // Wake the WS pool so the live dot flips green inside the
+                  // same click instead of waiting for a resource view to
+                  // mount and trigger getClusterStream itself.
+                  getClusterStream(name);
+                  await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+                  notify_.ok(`Reconnected ${name}`);
+                  // Now that we're back online, navigate into the cluster's
+                  // last-visited page (or Overview on first visit).
+                  setCluster(name);
+                  api.selectCluster(name).catch(() => {});
+                  navigate(`/${encodeURIComponent(name)}/overview`);
+                } catch (e: any) {
+                  notify_.bad("Connect failed", e?.message ?? String(e));
+                }
+              }}
             />
           ))}
         </div>
@@ -177,7 +197,7 @@ export function Sidebar({ onNavigate }: { onNavigate: (to: string) => void }) {
 function ClusterSidebarItem({
   cluster, isOpen, isActive, onToggleCluster,
   visibleSections, expandedSections, filter, route,
-  onToggleSection, onOpenRoute,
+  onToggleSection, onOpenRoute, onConnect,
 }: {
   cluster: ClusterInfo;
   isOpen: boolean;
@@ -189,8 +209,43 @@ function ClusterSidebarItem({
   route: { cluster: string; page: string };
   onToggleSection: (label: string) => void;
   onOpenRoute: (cluster: string, to: string) => void;
+  onConnect: (name: string) => void;
 }) {
   const tint = useClusterColor(cluster.name);
+  // Disconnected clusters: collapse the row to just its name + a Connect
+  // affordance (Lens behaviour). Clicking the row doesn't expand sections,
+  // doesn't auto-connect, and doesn't navigate — the user has to ask
+  // explicitly. This is what the user complained about: previously the
+  // chevron toggled sections open and clicking any subsection silently
+  // re-attached every informer.
+  if (cluster.paused) {
+    return (
+      <div className="pb-1">
+        <button
+          className={clsx(
+            "group w-full h-8 flex items-center gap-2 px-3 text-sm transition-colors",
+            "text-fg-mute hover:bg-bg-mute hover:text-fg",
+          )}
+          onClick={() => onConnect(cluster.name)}
+          title={`${cluster.name} is disconnected — click to reconnect`}
+        >
+          {/* Spacer where the chevron normally lives, so the badge stays
+              aligned with connected rows above/below. */}
+          <span className="w-[13px] inline-block" aria-hidden />
+          <ClusterBadge
+            name={cluster.name}
+            size={14}
+            filled={false}
+            title={`${cluster.name} — disconnected`}
+          />
+          <span className="min-w-0 flex-1 text-left truncate">{cluster.name}</span>
+          <span className="text-warn text-[9px] uppercase tracking-wider font-medium opacity-70 group-hover:opacity-100">
+            disconnected
+          </span>
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="pb-1">
       <button
