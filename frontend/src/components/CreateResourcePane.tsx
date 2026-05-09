@@ -13,7 +13,7 @@ import { FilePen, RefreshCcw } from "lucide-react";
 import { api } from "../lib/api";
 import { YAMLEditor } from "./YAMLEditor";
 import { allTemplates, templateForGVR } from "../lib/resourceTemplates";
-import { clusterColor } from "../lib/clusterColor";
+import { useClusterColor } from "../lib/clusterColor";
 
 export function CreateResourcePane({
   cluster, templateGvr, onClose, onApplied,
@@ -62,7 +62,7 @@ export function CreateResourcePane({
     }
   };
 
-  const tint = clusterColor(cluster);
+  const tint = useClusterColor(cluster);
 
   return (
     <div className="h-full flex flex-col bg-bg">

@@ -39,6 +39,11 @@ export type TabsState = {
   closeOthers: (id: string) => void;
   closeToTheRight: (id: string) => void;
   closeAll: () => void;
+  /** Drop every tab pointing at this cluster — used after the cluster is
+   *  unregistered so stale tabs don't keep tickling the WebSocket and
+   *  showing dead detail panels. Returns the new active id (null when no
+   *  tabs remain). */
+  closeForCluster: (cluster: string) => string | null;
   /** Bulk replace — used during hydration to rewrite ids when restoring. */
   reset: (tabs: PageTab[], activeId: string | null) => void;
 };
@@ -150,6 +155,16 @@ export const useTabs = create<TabsState>()(
       },
 
       closeAll: () => set({ tabs: [], activeId: null }),
+
+      closeForCluster: (cluster) => {
+        const { tabs, activeId } = get();
+        const remaining = tabs.filter((t) => t.cluster !== cluster);
+        if (remaining.length === tabs.length) return activeId;
+        const stillActive = remaining.some((t) => t.id === activeId);
+        const nextActive = stillActive ? activeId : (remaining[remaining.length - 1]?.id ?? null);
+        set({ tabs: remaining, activeId: nextActive });
+        return nextActive;
+      },
 
       reset: (tabs, activeId) => set({ tabs, activeId }),
     }),

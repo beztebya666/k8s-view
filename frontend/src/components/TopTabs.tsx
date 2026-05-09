@@ -27,7 +27,7 @@ import { api } from "../lib/api";
 import { useApp } from "../stores/app";
 import { useTabs, type PageTab } from "../stores/tabs";
 import { SECTIONS } from "../nav/sections";
-import { clusterColor } from "../lib/clusterColor";
+import { clusterColor, useClusterColor } from "../lib/clusterColor";
 
 const ROUTE_META: Record<string, { label: string; icon: LucideIcon }> = (() => {
   const m: Record<string, { label: string; icon: LucideIcon }> = {
@@ -228,65 +228,18 @@ export function TopTabs() {
   return (
     <div className="h-9 shrink-0 flex items-stretch bg-bg border-b border-line select-none">
       <div className="flex-1 min-w-0 flex items-stretch overflow-x-auto top-tabs-scroll">
-        {tabs.map((tab, idx) => {
-          const desc = describe(tab);
-          const Icon = desc.icon;
-          const active = tab.id === activeId;
-          const tint = clusterColor(tab.cluster);
-          return (
-            <div
-              key={tab.id}
-              role="tab"
-              aria-selected={active}
-              className={clsx(
-                "group relative flex items-center gap-1.5 pl-2.5 pr-1 cursor-pointer text-xs",
-                "border-r border-line",
-                "flex-1 basis-0 min-w-[110px] max-w-[200px]",
-                active
-                  ? "bg-bg-soft text-fg"
-                  : "bg-bg text-fg-soft hover:bg-bg-mute hover:text-fg",
-              )}
-              onClick={() => onSelect(tab)}
-              onMouseDown={(e) => onMiddleClick(e, tab)}
-              onAuxClick={(e) => onMiddleClick(e, tab)}
-              onContextMenu={(e) => onContextMenu(e, tab, idx)}
-              title={`${desc.label} · ${tab.cluster}${desc.detail ? ` · ${desc.detail}` : ""}`}
-            >
-              {active && (
-                <span
-                  className="absolute left-0 right-0 top-0 h-[2px]"
-                  style={{ background: tint.hsl }}
-                  aria-hidden
-                />
-              )}
-              <Icon
-                size={12}
-                strokeWidth={1.7}
-                className="shrink-0"
-                style={{ color: tint.hsl, opacity: active ? 1 : 0.85 }}
-              />
-              <span className="min-w-0 flex flex-col leading-tight overflow-hidden">
-                <span className="truncate">{desc.label}</span>
-                <span className="truncate text-[10px] text-fg-mute">
-                  {tab.cluster}{desc.detail ? ` · ${desc.detail}` : ""}
-                </span>
-              </span>
-              <button
-                type="button"
-                className={clsx(
-                  "ml-auto h-5 w-5 rounded grid place-items-center text-fg-mute hover:text-fg hover:bg-bg-mute shrink-0",
-                  active ? "opacity-90" : "opacity-0 group-hover:opacity-90",
-                )}
-                onClick={(e) => { e.stopPropagation(); onClose(tab); }}
-                onMouseDown={(e) => e.stopPropagation()}
-                title="Close tab"
-                aria-label="Close tab"
-              >
-                <X size={11} />
-              </button>
-            </div>
-          );
-        })}
+        {tabs.map((tab, idx) => (
+          <TabPill
+            key={tab.id}
+            tab={tab}
+            idx={idx}
+            active={tab.id === activeId}
+            onSelect={onSelect}
+            onClose={onClose}
+            onMiddleClick={onMiddleClick}
+            onContextMenu={onContextMenu}
+          />
+        ))}
       </div>
       <button
         type="button"
@@ -327,6 +280,79 @@ export function TopTabs() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// One pill in the top tab strip. Lives in its own component so we can call
+// `useClusterColor(tab.cluster)` per pill without breaking the rules-of-
+// hooks in the parent's `.map(...)` callback. The hook subscribes to the
+// cluster's persisted hue, so flipping the colour in the badge popover
+// repaints every tab top-border + icon for that cluster instantly.
+function TabPill({
+  tab, idx, active, onSelect, onClose, onMiddleClick, onContextMenu,
+}: {
+  tab: PageTab;
+  idx: number;
+  active: boolean;
+  onSelect: (t: PageTab) => void;
+  onClose: (t: PageTab) => void;
+  onMiddleClick: (e: React.MouseEvent, t: PageTab) => void;
+  onContextMenu: (e: React.MouseEvent, t: PageTab, i: number) => void;
+}) {
+  const desc = describe(tab);
+  const Icon = desc.icon;
+  const tint = useClusterColor(tab.cluster);
+  return (
+    <div
+      role="tab"
+      aria-selected={active}
+      className={clsx(
+        "group relative flex items-center gap-1.5 pl-2.5 pr-1 cursor-pointer text-xs",
+        "border-r border-line",
+        "flex-1 basis-0 min-w-[110px] max-w-[200px]",
+        active
+          ? "bg-bg-soft text-fg"
+          : "bg-bg text-fg-soft hover:bg-bg-mute hover:text-fg",
+      )}
+      onClick={() => onSelect(tab)}
+      onMouseDown={(e) => onMiddleClick(e, tab)}
+      onAuxClick={(e) => onMiddleClick(e, tab)}
+      onContextMenu={(e) => onContextMenu(e, tab, idx)}
+      title={`${desc.label} · ${tab.cluster}${desc.detail ? ` · ${desc.detail}` : ""}`}
+    >
+      {active && (
+        <span
+          className="absolute left-0 right-0 top-0 h-[2px]"
+          style={{ background: tint.hsl }}
+          aria-hidden
+        />
+      )}
+      <Icon
+        size={12}
+        strokeWidth={1.7}
+        className="shrink-0"
+        style={{ color: tint.hsl, opacity: active ? 1 : 0.85 }}
+      />
+      <span className="min-w-0 flex flex-col leading-tight overflow-hidden">
+        <span className="truncate">{desc.label}</span>
+        <span className="truncate text-[10px] text-fg-mute">
+          {tab.cluster}{desc.detail ? ` · ${desc.detail}` : ""}
+        </span>
+      </span>
+      <button
+        type="button"
+        className={clsx(
+          "ml-auto h-5 w-5 rounded grid place-items-center text-fg-mute hover:text-fg hover:bg-bg-mute shrink-0",
+          active ? "opacity-90" : "opacity-0 group-hover:opacity-90",
+        )}
+        onClick={(e) => { e.stopPropagation(); onClose(tab); }}
+        onMouseDown={(e) => e.stopPropagation()}
+        title="Close tab"
+        aria-label="Close tab"
+      >
+        <X size={11} />
+      </button>
     </div>
   );
 }

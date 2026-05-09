@@ -6,7 +6,7 @@ import { ChevronDown, ChevronRight, FileUp, Folder, Plus, Search, Star, Terminal
 import { api, type ClusterInfo } from "../lib/api";
 import { useApp } from "../stores/app";
 import { SECTIONS, type NavItem, type NavSection } from "../nav/sections";
-import { clusterColor } from "../lib/clusterColor";
+import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { AddClusterModal } from "./AddClusterModal";
 import { ClusterBadge } from "./ClusterBadge";
 import { getSnapshot as favSnapshot, listFor, remove as removeFav, reorder as reorderFav, subscribe as subscribeFav } from "../lib/favourites";
@@ -92,65 +92,21 @@ export function Sidebar({ onNavigate }: { onNavigate: (to: string) => void }) {
         </div>
 
         <div className="pb-3">
-          {clustersToRender.map((cluster) => {
-            const clusterOpen = expandedClusters.has(cluster.name);
-            const clusterActive = cluster.name === route.cluster;
-            const tint = clusterColor(cluster.name);
-            return (
-              <div key={cluster.name} className="pb-1">
-                <button
-                  className={clsx(
-                    "w-full h-8 flex items-center gap-2 px-3 text-sm hover:bg-bg-mute transition-colors",
-                    clusterActive ? "text-fg" : "text-fg-soft",
-                  )}
-                  onClick={() => toggleCluster(cluster.name)}
-                >
-                  {clusterOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                  <ClusterBadge
-                    name={cluster.name}
-                    size={14}
-                    filled={cluster.connected}
-                    title={cluster.connected ? "connected — click to customise icon" : "offline — click to customise icon"}
-                  />
-                  <span className="min-w-0 flex-1 text-left truncate">{cluster.name}</span>
-                  {cluster.version && (
-                    <span className="max-w-[68px] truncate text-[10px] text-fg-mute">{cluster.version}</span>
-                  )}
-                </button>
-
-                {clusterOpen && (
-                  <div
-                    className="ml-4"
-                    style={{ borderLeft: `1px solid ${tint.bg}` }}
-                  >
-                    {visibleSections.map((section, sectionIdx) => {
-                      const sectionId = section.label ?? `__headerless_${sectionIdx}`;
-                      const key = sectionKey(cluster.name, sectionId);
-                      // Headerless sections (label undefined) are always
-                      // expanded — the user has nothing to collapse, and Lens
-                      // surfaces these rows directly without the toggle.
-                      const sectionOpen = !section.label
-                        || expandedSections.has(key)
-                        || filter.trim().length > 0;
-                      return (
-                        <ClusterSection
-                          key={sectionId}
-                          cluster={cluster}
-                          section={section}
-                          activeCluster={route.cluster}
-                          activePage={route.page}
-                          accent={tint.hsl}
-                          open={sectionOpen}
-                          onToggle={() => section.label && toggleSection(cluster.name, section.label)}
-                          onOpen={openRoute}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {clustersToRender.map((cluster) => (
+            <ClusterSidebarItem
+              key={cluster.name}
+              cluster={cluster}
+              isOpen={expandedClusters.has(cluster.name)}
+              isActive={cluster.name === route.cluster}
+              onToggleCluster={() => toggleCluster(cluster.name)}
+              visibleSections={visibleSections}
+              expandedSections={expandedSections}
+              filter={filter}
+              route={route}
+              onToggleSection={(label) => toggleSection(cluster.name, label)}
+              onOpenRoute={openRoute}
+            />
+          ))}
         </div>
       </div>
 
@@ -201,6 +157,85 @@ export function Sidebar({ onNavigate }: { onNavigate: (to: string) => void }) {
         />
       )}
     </nav>
+  );
+}
+
+// One row for a single cluster in the sidebar. Lives in its own component
+// so we can call `useClusterColor(name)` without violating the rules-of-
+// hooks in the parent's `.map()` callback. The hook subscribes to the
+// cluster's `iconHue` setting, so flipping the colour in the badge
+// popover repaints both the rail border and every accent below — without
+// it the swatch only painted the badge dot.
+function ClusterSidebarItem({
+  cluster, isOpen, isActive, onToggleCluster,
+  visibleSections, expandedSections, filter, route,
+  onToggleSection, onOpenRoute,
+}: {
+  cluster: ClusterInfo;
+  isOpen: boolean;
+  isActive: boolean;
+  onToggleCluster: () => void;
+  visibleSections: NavSection[];
+  expandedSections: Set<string>;
+  filter: string;
+  route: { cluster: string; page: string };
+  onToggleSection: (label: string) => void;
+  onOpenRoute: (cluster: string, to: string) => void;
+}) {
+  const tint = useClusterColor(cluster.name);
+  return (
+    <div className="pb-1">
+      <button
+        className={clsx(
+          "w-full h-8 flex items-center gap-2 px-3 text-sm hover:bg-bg-mute transition-colors",
+          isActive ? "text-fg" : "text-fg-soft",
+        )}
+        onClick={onToggleCluster}
+      >
+        {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        <ClusterBadge
+          name={cluster.name}
+          size={14}
+          filled={cluster.connected}
+          title={cluster.connected ? "connected — click to customise icon" : "offline — click to customise icon"}
+        />
+        <span className="min-w-0 flex-1 text-left truncate">{cluster.name}</span>
+        {cluster.version && (
+          <span className="max-w-[68px] truncate text-[10px] text-fg-mute">{cluster.version}</span>
+        )}
+      </button>
+
+      {isOpen && (
+        <div
+          className="ml-4"
+          style={{ borderLeft: `1px solid ${tint.bg}` }}
+        >
+          {visibleSections.map((section, sectionIdx) => {
+            const sectionId = section.label ?? `__headerless_${sectionIdx}`;
+            const key = sectionKey(cluster.name, sectionId);
+            // Headerless sections (label undefined) are always expanded —
+            // the user has nothing to collapse, and Lens surfaces these
+            // rows directly without the toggle.
+            const sectionOpen = !section.label
+              || expandedSections.has(key)
+              || filter.trim().length > 0;
+            return (
+              <ClusterSection
+                key={sectionId}
+                cluster={cluster}
+                section={section}
+                activeCluster={route.cluster}
+                activePage={route.page}
+                accent={tint.hsl}
+                open={sectionOpen}
+                onToggle={() => section.label && onToggleSection(section.label)}
+                onOpen={onOpenRoute}
+              />
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

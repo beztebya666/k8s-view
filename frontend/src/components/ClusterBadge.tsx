@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
-import { clusterColor } from "../lib/clusterColor";
+import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { useApp } from "../stores/app";
 
 const HUE_PRESETS = [
@@ -41,7 +41,7 @@ interface Props {
 export function ClusterBadge({ name, size = 14, editable = true, className, filled = true, title }: Props) {
   const settings = useApp((s) => s.getClusterSettings(name));
   const setClusterSettings = useApp((s) => s.setClusterSettings);
-  const tint = clusterColor(name, settings.iconHue);
+  const tint = useClusterColor(name);
   const label = settings.iconLabel.trim();
   const fontSize = Math.max(8, Math.floor(size * 0.55));
 

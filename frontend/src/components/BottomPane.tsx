@@ -23,7 +23,7 @@ import { PodExecPage } from "../pages/PodExecPage";
 import { TerminalLauncherInline } from "../pages/TerminalLauncherPage";
 import { YAMLEditPane } from "./YAMLEditPane";
 import { CreateResourcePane } from "./CreateResourcePane";
-import { clusterColor } from "../lib/clusterColor";
+import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { useApp } from "../stores/app";
 
 const STORAGE_KEY = "k8s-view:bottom-pane-height";
@@ -202,10 +202,22 @@ function tabIcon(r: BottomRef) {
   if (r.action === "yaml") return <FileCode2 size={11} />;
   if (r.action === "create") {
     // Cluster-tinted pencil — Lens-style cluster identification at a glance.
-    const tint = r.cluster ? clusterColor(r.cluster).hsl : undefined;
-    return <FilePen size={11} style={tint ? { color: tint } : undefined} />;
+    // The hook lives in ClusterTintedIcon so tabIcon stays a plain helper
+    // (it's called from .map() callbacks where rules-of-hooks would bite).
+    return <ClusterTintedIcon cluster={r.cluster} />;
   }
   return <TerminalSquare size={11} />;
+}
+
+function ClusterTintedIcon({ cluster }: { cluster?: string }) {
+  const tint = useClusterColor(cluster ?? "");
+  const color = cluster ? tint.hsl : undefined;
+  return <FilePen size={11} style={color ? { color } : undefined} />;
+}
+
+function ClusterTintedFilePlus({ cluster }: { cluster: string }) {
+  const tint = useClusterColor(cluster);
+  return <FilePlus2 size={12} style={{ color: tint.hsl }} />;
 }
 
 export function BottomPaneHost() {
@@ -600,7 +612,7 @@ function AddTabButton({ onAdd }: { onAdd: (r: BottomRef) => void }) {
             onClick={() => { setOpen(false); onAdd({ action: "terminal" }); }}
           />
           <MenuItem
-            icon={<FilePlus2 size={12} style={{ color: clusterColor(cluster).hsl }} />}
+            icon={<ClusterTintedFilePlus cluster={cluster} />}
             label={`Create resource in ${cluster || "cluster"}`}
             onClick={() => {
               setOpen(false);

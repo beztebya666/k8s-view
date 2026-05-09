@@ -15,15 +15,15 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useApp } from "../stores/app";
 import { useBottomPane } from "./BottomPane";
-import { clusterColor } from "../lib/clusterColor";
+import { useClusterColor } from "../lib/clusterColor";
 
 export function CreateFab({ templateGvr }: { templateGvr?: string }) {
   const cluster = useApp((s) => s.cluster);
   const bottom = useBottomPane();
   const [hover, setHover] = useState(false);
+  const tint = useClusterColor(cluster);
 
   if (!cluster) return null;
-  const tint = clusterColor(cluster);
 
   return (
     <div

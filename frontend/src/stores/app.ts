@@ -86,6 +86,12 @@ export type AppState = {
   setLastPage: (cluster: string, page: string) => void;
   getClusterSettings: (cluster: string) => ClusterSettings;
   setClusterSettings: (cluster: string, patch: Partial<ClusterSettings>) => void;
+  /** Drop every piece of per-cluster state we keep on the device — settings,
+   *  last-page memory, and the active cluster pointer if it matches. Called
+   *  from the Topbar after `api.removeCluster` so a re-imported cluster of
+   *  the same name comes up with default settings rather than inheriting
+   *  the previous incarnation's hue / icon / preferences. */
+  forgetCluster: (cluster: string) => void;
 };
 
 export const useApp = create<AppState>()(
@@ -134,6 +140,21 @@ export const useApp = create<AppState>()(
                 : prev.lensMetrics,
             },
           },
+        };
+      }),
+      forgetCluster: (cluster) => set((state) => {
+        const nextSettings = { ...state.clusterSettings };
+        delete nextSettings[cluster];
+        const nextLastPage = { ...state.lastPage };
+        delete nextLastPage[cluster];
+        return {
+          clusterSettings: nextSettings,
+          lastPage: nextLastPage,
+          // Wipe the active cluster pointer when it matches — caller will
+          // navigate to "/" after this and a stale name in `cluster` would
+          // make every `useResourceList(cluster, …)` keep firing against a
+          // dead WebSocket pool entry.
+          cluster: state.cluster === cluster ? "" : state.cluster,
         };
       }),
     }),

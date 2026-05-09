@@ -5,11 +5,12 @@ import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileU
 import clsx from "clsx";
 import { api, ClusterInfo } from "../lib/api";
 import { useApp } from "../stores/app";
-import { getClusterStream } from "../lib/stream";
+import { useTabs } from "../stores/tabs";
+import { getClusterStream, destroyClusterStream } from "../lib/stream";
 import { AddClusterModal } from "./AddClusterModal";
 import { modals } from "./Modals";
 import { notify_ } from "../lib/notifications";
-import { clusterColor } from "../lib/clusterColor";
+import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { useBottomPane } from "./BottomPane";
 import { useDismiss } from "../lib/useDismiss";
 
@@ -34,7 +35,7 @@ export function Topbar() {
   const [addOpen, setAddOpen] = useState(false);
   const queryClient = useQueryClient();
   const bottom = useBottomPane();
-  const curTint = clusterColor(cluster);
+  const curTint = useClusterColor(cluster);
 
   const { data: clusters } = useQuery({ queryKey: ["clusters"], queryFn: api.clusters });
   const { data: namespaceList } = useQuery({
@@ -78,10 +79,26 @@ export function Topbar() {
           if (!ok) return;
           try {
             await api.removeCluster(name);
+            // Local cleanup must run BEFORE we invalidate queries so the
+            // cluster picker's next render doesn't briefly observe stale
+            // tabs / settings pointing at the dead cluster:
+            //   1. Tear down the per-cluster WebSocket pool entry. Without
+            //      this any open list/detail page would keep reconnecting
+            //      to /api/v1/<gone>/stream and 404'ing in the backend log.
+            //   2. Drop every tab that pointed at the cluster — leaving
+            //      them around would re-mount their resource hooks on the
+            //      next render and rebuild the dead stream.
+            //   3. Forget local state (settings, last-page, active pointer)
+            //      so a re-imported cluster of the same name comes up
+            //      fresh instead of inheriting the previous owner's hue.
+            destroyClusterStream(name);
+            useTabs.getState().closeForCluster(name);
+            useApp.getState().forgetCluster(name);
             await queryClient.invalidateQueries({ queryKey: ["clusters"] });
+            // Drop any cached per-cluster query (namespaces, events, …) so
+            // we don't briefly render stale data on the next route.
+            await queryClient.removeQueries({ predicate: (q) => Array.isArray(q.queryKey) && q.queryKey.includes(name) });
             notify_.ok(`Removed ${name}`);
-            // If the user was viewing the cluster they just removed,
-            // bounce them to whatever cluster is now current.
             if (cluster === name) {
               navigate("/");
             }
@@ -184,7 +201,7 @@ function ClusterPicker({
   const ref = useRef<HTMLDivElement | null>(null);
   useDismiss(ref, open, () => onOpen(false));
   const cur = clusters.find((c) => c.name === current);
-  const curTint = clusterColor(current || "");
+  const curTint = useClusterColor(current || "");
   return (
     <div className="relative" ref={ref}>
       <button className="btn" onClick={() => onOpen(!open)}>
@@ -204,43 +221,15 @@ function ClusterPicker({
             {clusters.length === 0 && (
               <div className="px-3 py-2 text-xs text-fg-mute">No clusters configured</div>
             )}
-            {clusters.map((c) => {
-              const tint = clusterColor(c.name);
-              return (
-                <div
-                  key={c.name}
-                  className={clsx(
-                    "group w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-bg-mute",
-                    c.name === current && "bg-bg-mute",
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
-                    onClick={() => { onSelect(c.name); onOpen(false); }}
-                  >
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{
-                        background: c.connected ? tint.hsl : "transparent",
-                        border: c.connected ? "none" : `1px solid ${tint.hsl}`,
-                      }}
-                    />
-                    <span className="flex-1 text-left truncate">{c.name}</span>
-                    <span className="text-fg-mute text-[10px]">{c.version || "—"}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="shrink-0 h-6 w-6 grid place-items-center rounded text-fg-mute opacity-0 group-hover:opacity-100 hover:text-bad hover:bg-bad/10"
-                    title={`Remove cluster ${c.name}`}
-                    aria-label={`Remove cluster ${c.name}`}
-                    onClick={(e) => { e.stopPropagation(); onRemove(c.name); }}
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              );
-            })}
+            {clusters.map((c) => (
+              <ClusterRow
+                key={c.name}
+                info={c}
+                isCurrent={c.name === current}
+                onSelect={() => { onSelect(c.name); onOpen(false); }}
+                onRemove={() => onRemove(c.name)}
+              />
+            ))}
           </div>
           <div className="mt-1 pt-1 border-t border-line">
             <button
@@ -253,6 +242,53 @@ function ClusterPicker({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Per-cluster row inside the picker. Lives in its own component so we can
+// call `useClusterColor(c.name)` per row without violating the rules-of-
+// hooks (a hook in the parent's `.map(...)` callback would be illegal).
+function ClusterRow({
+  info, isCurrent, onSelect, onRemove,
+}: {
+  info: ClusterInfo;
+  isCurrent: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+}) {
+  const tint = useClusterColor(info.name);
+  return (
+    <div
+      className={clsx(
+        "group w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-bg-mute",
+        isCurrent && "bg-bg-mute",
+      )}
+    >
+      <button
+        type="button"
+        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+        onClick={onSelect}
+      >
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{
+            background: info.connected ? tint.hsl : "transparent",
+            border: info.connected ? "none" : `1px solid ${tint.hsl}`,
+          }}
+        />
+        <span className="flex-1 text-left truncate">{info.name}</span>
+        <span className="text-fg-mute text-[10px]">{info.version || "—"}</span>
+      </button>
+      <button
+        type="button"
+        className="shrink-0 h-6 w-6 grid place-items-center rounded text-fg-mute opacity-0 group-hover:opacity-100 hover:text-bad hover:bg-bad/10"
+        title={`Remove cluster ${info.name}`}
+        aria-label={`Remove cluster ${info.name}`}
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
+      >
+        <Trash2 size={12} />
+      </button>
     </div>
   );
 }

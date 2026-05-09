@@ -187,13 +187,27 @@ func (h *handlers) writeError(w http.ResponseWriter, r *http.Request, status int
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	logger.Warn("api request failed",
+	fields := []zap.Field{
 		zap.String("request_id", middleware.GetReqID(r.Context())),
 		zap.String("method", r.Method),
 		zap.String("path", r.URL.Path),
 		zap.String("cluster", chi.URLParam(r, "cluster")),
 		zap.Int("status", status),
-		zap.Error(err))
+		zap.Error(err),
+	}
+	// 4xx is the client's fault — usually a stale browser tab pointing at a
+	// removed cluster, an invalid resource name, or an RBAC denial. None of
+	// those need an operator alert; keep them at Debug so the log volume
+	// stays signal-shaped. 5xx (and anything weirder) still gets a Warn so
+	// real backend faults remain visible.
+	switch {
+	case status >= 500:
+		logger.Warn("api request failed", fields...)
+	case status >= 400:
+		logger.Debug("api request rejected", fields...)
+	default:
+		logger.Info("api request returned non-2xx", fields...)
+	}
 	writeError(w, status, err)
 }
 
