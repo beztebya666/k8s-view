@@ -175,18 +175,6 @@ export function TopTabs() {
 
   const [menu, setMenu] = useState<{ tab: PageTab; index: number; x: number; y: number } | null>(null);
 
-  // openFallbackTab is used after closing tabs (deduped — landing on the
-  // existing overview tab is fine). The standalone New-Tab button uses
-  // `createNewTab` below so it always produces a visible new entry even
-  // when the Overview tab is already focused.
-  const openFallbackTab = useCallback((clusterHint?: string) => {
-    const target = clusterHint || fallbackCluster || clusters?.find((c) => c.current)?.name || clusters?.[0]?.name || "";
-    if (!target) return;
-    const id = openTab({ cluster: target, pathname: "overview", search: "" });
-    const t = useTabs.getState().tabs.find((x) => x.id === id);
-    navigate(t ? buildPath(t) : `/${encodeURIComponent(target)}/overview`);
-  }, [openTab, navigate, fallbackCluster, clusters]);
-
   const createNewTab = useCallback(() => {
     const target = fallbackCluster || clusters?.find((c) => c.current)?.name || clusters?.[0]?.name || "";
     if (!target) return;
@@ -207,8 +195,14 @@ export function TopTabs() {
       if (t) navigate(buildPath(t));
       return;
     }
-    openFallbackTab();
-  }, [navigate, openFallbackTab]);
+    // Closed the very last tab — Lens-style behaviour: drop to the home
+    // shell instead of conjuring a fresh Overview pill out of thin air.
+    // We also wipe the active cluster pointer so RootRedirect goes
+    // straight to HomeShell without a one-frame bounce through the
+    // remembered cluster's Overview route.
+    useApp.getState().setCluster("");
+    navigate("/", { replace: true });
+  }, [navigate]);
 
   const onClose = useCallback((tab: PageTab) => {
     const newActive = closeTab(tab.id);
@@ -285,7 +279,11 @@ export function TopTabs() {
               }
             } else if (kind === "closeAll") {
               closeAll();
-              openFallbackTab(target.cluster);
+              // Same Lens behaviour as closing the last tab via the X —
+              // drop to the home shell instead of replacing the strip
+              // with a fresh Overview pill the user didn't ask for.
+              useApp.getState().setCluster("");
+              navigate("/", { replace: true });
             }
           }}
         />
