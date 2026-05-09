@@ -57,52 +57,105 @@ point it at a kubeconfig, and you're done.
   so 50 open browser tabs cost the cluster the same as 1.
 - Built-in resources, CRDs, and any GVR the discovery client surfaces are
   rendered the same way (list, detail, YAML edit, events, actions).
+- Per-resource warning sort: anything with a structural problem (failed
+  pull, crashloop, exit code, ProgressDeadlineExceeded, drained node, …)
+  bubbles to the top of every list with a clickable warning chip that
+  opens a verbatim cause tooltip.
 
-**Workflow-grade UX.**
-- Lens-style top tab bar — every navigation lands in its own tab, with
-  per-cluster colour identification on the active border and tab icon.
-- Bottom workspace pane that hosts logs, `exec`, `attach`, port-forward,
-  YAML edit and Create resource as independent tabs that survive navigation.
-- Floating "Create resource" FAB on every resource page, pre-filled with a
-  template that matches the page's GVR (Pod, Deployment, Ingress,
-  ConfigMap, RBAC, HPA, PDB, …).
-- Monaco YAML editor with server-side apply, plus a side-by-side **diff
-  preview** before any change goes through.
-- **Deployment rollout history & one-click rollback** — view every owned
-  ReplicaSet, see images and replica counts per revision, and roll back
-  with a server-side diff confirmation (kubectl-rollout-undo equivalent).
-- **kubectl-describe view** with full event propagation across owners and
-  pods, plus a Related-objects panel with **sortable Name / Status / Age**
-  columns (preferences persist per device).
-- Global and per-page search, multi-namespace filter, warning-first sort,
-  bulk delete, scale, restart, drain, cordon, evict.
-- Dark / light themes that share a single token palette.
+**Side-panel inline actions — operate without ever opening a terminal.**
+- Open any pod, deployment, statefulset, daemonset, replicaset, job or
+  cronjob in the right side-panel and trigger the most common kubectl
+  verbs from a single icon strip:
+  - **Scale** with a slider modal (Lens-style current/target readout).
+  - **Rollout restart** (`kubectl rollout restart` equivalent — patches
+    the template's `restartedAt` annotation, pods recycle gradually).
+  - **Rollout history & one-click rollback** for Deployments — every
+    owned ReplicaSet listed with image, replica counts and age; rollback
+    is gated by a side-by-side server-side YAML diff confirmation
+    (`kubectl rollout undo --to-revision=N` equivalent). `change-cause`
+    annotation is opt-in via a per-device toggle.
+  - **kubectl-describe** view with full event propagation across owners
+    and pods, plus a sortable **Related objects** panel (Name / Status /
+    Age columns; sort preference persists per device).
+  - **Trigger now** for CronJob (creates a one-shot Job from the
+    `jobTemplate`) and **Suspend / Resume** for the schedule itself.
+  - **Edit YAML** in a Monaco editor with a "Review diff" step before
+    server-side apply; **Delete** with a confirm modal (foreground /
+    background propagation, force option).
+  - **Copy kubectl** popover that emits a context-prefixed command for
+    `get -o yaml`, `describe`, `logs`, `exec`, `port-forward`, etc.
+  - **Pin to favourites** so the resource appears in the sidebar across
+    every cluster tab.
 
-**Multi-cluster.**
-- Reads every context in `KUBECONFIG` on startup; switching clusters in the
-  UI re-uses the existing informer pool, no reload.
-- Add additional kubeconfigs at runtime — the UI ships an "Add cluster from
-  kubeconfig" import flow that persists the file under `~/.k8s-view/imported/`
-  and registers every context as a cluster.
-- Each cluster is assigned a deterministic colour (FNV-1a hash of the name)
+**Pod sessions in the bottom workspace pane.**
+- Independent tabs for **logs**, **exec** (interactive xterm.js shell),
+  **attach** to a running container, **port-forward**, **edit YAML**, and
+  **create from template** — they survive page navigation.
+- Logs panel: multi-container selection, server-side initial tail (50 →
+  20 000 lines), in-browser ring with a **Buffer** toggle to grow past
+  the tail size up to a hard cap, **timestamps** and **pod-name** column
+  toggles, **previous container** dump, regex / case-sensitive **search**
+  with match counter and prev/next nav, filter mode, **Pause** /
+  **Resume**, **Clear**, **Following / Jump-to-present** anchor, and a
+  pop-out window to detach the tab into its own browser window.
+- Cross-rollout pod history: when a pod ends and a new one is minted by
+  the same controller, the logs tab offers a one-click jump to the
+  predecessor's logs without losing the live tail.
+- Auto-reconnect with exponential backoff and a server keepalive, so
+  alive-but-quiet pods never get marked **Frozen** by mistake.
+
+**Multi-cluster, no-login session model.**
+- Reads every context in `$KUBECONFIG` on startup; switching clusters in
+  the UI re-uses the existing informer pool, no reload.
+- Add additional kubeconfigs at runtime — the UI ships an "Add cluster
+  from kubeconfig" import flow that persists the file per-identity and
+  re-registers every context on next start.
+- Each cluster gets a deterministic colour (FNV-1a hash of the name)
   used everywhere the UI needs to disambiguate which cluster an action
-  applies to.
+  applies to: the tab strip border, the cluster badge, the action chips.
+- **Per-device session** — the dashboard issues a `kv_device` cookie on
+  first visit so two browsers / devices keep separate cluster lists
+  without a login wall. The legacy `~/.k8s-view/imported/` directory is
+  auto-adopted to the first device. SSO / LDAP providers can be layered
+  on top via the auth chain.
+
+**Cluster Overview & metrics.**
+- Per-cluster Overview page with workload counts, node status grid, and
+  CPU / Memory donut charts.
+- Pod-level **CPU / Memory / Network / Filesystem** time-series in the
+  side panel, with reference lines for `requests` and `limits` read from
+  the live spec.
+- **Prometheus auto-discovery** — the backend probes for a `Service`
+  matching `prometheus`/`kube-prometheus`/etc. and proxies PromQL when
+  found; falls back to `metrics-server` for CPU/Memory and to "no metrics"
+  cleanly when neither is installed.
+- Workload metrics aggregate across every pod in the controller's
+  pod-name pattern, so a Deployment chart shows the sum of its replicas
+  on both Prometheus and metrics-server backends.
+
+**Topology & policy visualisation.**
+- Service / Deployment / Pod **topology graph** in the side panel —
+  shows owner chains, label-selected backends, and cross-namespace
+  references at a glance.
+- **NetworkPolicy graph** that resolves ingress / egress rules into the
+  pods they actually permit, with a clickable matrix view.
+- **GitOps source surfacing** — when a resource is owned by Argo CD or
+  Flux, the side panel shows the source repo / path / target revision.
 
 **Built for scale.**
-- Frontend uses `@tanstack/react-virtual` end-to-end — the DOM only renders
-  what's on screen, regardless of list size.
-- Backend uses `client-go` shared informers with tuned QPS/burst (100/200)
-  and configurable resync.
-- `--mode=api` + `--mode=worker` + Redis lets you scale the API horizontally
-  while a single worker fleet owns the watches per cluster.
+- Frontend uses `@tanstack/react-virtual` end-to-end — the DOM only
+  renders what's on screen, regardless of list size.
+- Backend uses `client-go` shared informers with tuned QPS / burst
+  (100 / 200) and configurable resync.
+- `--mode=api` + `--mode=worker` + Redis lets you scale the API
+  horizontally while a single worker fleet owns the watches per cluster.
 
 **Operations.**
-- `/api/v1/healthz` and `/api/v1/version` for probes.
+- `GET /api/v1/healthz` and `GET /api/v1/version` for probes.
 - Structured Zap logging with request-IDs, latency, status, bytes.
-- Prometheus auto-discovery and proxy: if the cluster has a Prometheus
-  Service, the Cluster Overview switches from metrics-server data to
-  Prometheus PromQL automatically.
-- Pod / node usage from metrics-server when Prometheus is unavailable.
+- Container is hardened by default — non-root, read-only root FS,
+  dropped caps, `RuntimeDefault` seccomp.
+- No telemetry. No phone-home. No third-party SDKs in the binary.
 
 ---
 
@@ -191,22 +244,32 @@ works in shells, systemd units and pod specs.
 
 ### Authentication
 
-`k8s-view` does not implement an identity store. It supports two paths:
+Identity in `k8s-view` is **pluggable**, with no required login wall. The
+auth middleware composes one or more providers from `internal/auth/`:
 
-1. **HTTP basic auth.** Set `--basic-auth-user`/`--basic-auth-pass` (or the
-   `K8SVIEW_BASIC_AUTH_USER`/`K8SVIEW_BASIC_AUTH_PASS` env vars). Useful for
-   "guard the dashboard with one shared password" deployments. The
-   credentials are compared with `crypto/subtle.ConstantTimeCompare`.
-
-2. **Front it with an authenticating proxy.** For SSO / OIDC / mTLS, deploy
-   `k8s-view` behind any reverse proxy that performs authentication
+1. **Device cookie (default).** A `kv_device` cookie is issued on first
+   visit so two browsers / devices keep separate cluster lists. Imported
+   kubeconfigs and per-user preferences hang off the device ID. Best for
+   single-tenant or trusted-network deployments where "open and use" is
+   the desired UX.
+2. **HTTP basic auth.** Set `--basic-auth-user` / `--basic-auth-pass` (or
+   the `K8SVIEW_BASIC_AUTH_*` env vars). The credentials are compared
+   with `crypto/subtle.ConstantTimeCompare`. Pairs well with the device
+   cookie: basic-auth gates entry, the cookie disambiguates devices.
+3. **OIDC / LDAP.** First-class providers ship in
+   [`internal/auth/oidc.go`](internal/auth/oidc.go) and
+   [`internal/auth/ldap.go`](internal/auth/ldap.go) — when configured,
+   the resolved identity replaces the device cookie as the primary
+   subject for per-identity manager scoping.
+4. **Authenticating reverse proxy.** For SSO frontends you already run
    (`oauth2-proxy`, Pomerium, Cloudflare Access, an Ingress with an OIDC
-   filter, etc.). The chart's Ingress annotations are designed to make this
-   straightforward.
+   filter), deploy `k8s-view` behind it — the chart's Ingress
+   annotations are written to make this straightforward.
 
-Authorisation is delegated to the Kubernetes API server: the dashboard
-never has more privilege than the ServiceAccount or kubeconfig user it
-runs as. Lock down what the UI can do by editing the bound RBAC rules.
+**Authorisation** is delegated to the Kubernetes API server: the
+dashboard never has more privilege than the ServiceAccount or
+kubeconfig user it runs as. Lock down what the UI can do by editing
+the bound RBAC rules — see [RBAC](#rbac) below.
 
 ### Multi-cluster
 

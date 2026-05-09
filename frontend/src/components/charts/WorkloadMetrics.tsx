@@ -180,14 +180,20 @@ function KebabMenu({
       close();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    // Page-level scroll only — no `capture: true`. With capture the listener
+    // would also fire for scrolls inside *any* descendant: an auto-following
+    // log pane in the bottom workspace appends a line every second, scrolls
+    // its own container, and would close this popover on every tick.
+    // Without capture, scroll events on a child element don't bubble to
+    // window, so only a true page scroll dismisses the menu.
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
-    window.addEventListener("scroll", close, true);
+    window.addEventListener("scroll", close);
     window.addEventListener("resize", close);
     return () => {
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", close);
       window.removeEventListener("resize", close);
     };
   }, [open]);
@@ -463,16 +469,17 @@ function FallbackTimeSeries({
   refLines: RefLine[];
   setLatest: SetLatest;
 }) {
+  const kind: string = obj?.kind ?? "";
   const ns: string = obj?.metadata?.namespace ?? "";
-  const pod: string = obj?.metadata?.name ?? "";
+  const name: string = obj?.metadata?.name ?? "";
   const source = useEffectiveMetricsSource(cluster);
-  const enabled = source === "metrics-server" && !!cluster && !!ns && !!pod;
+  const enabled = source === "metrics-server" && !!cluster && !!ns && !!name;
   const samplesRef = useRef<FallbackSample[]>([]);
   const [, force] = useState(0);
 
   const query = useQuery({
     enabled,
-    queryKey: ["pod-metric-fallback", cluster, ns, pod],
+    queryKey: ["pod-metric-fallback", cluster, ns, kind, name, container ?? "_"],
     queryFn: () => api.podMetrics(cluster, ns),
     refetchInterval: FALLBACK_INTERVAL,
     retry: false,
@@ -481,11 +488,16 @@ function FallbackTimeSeries({
   useEffect(() => {
     samplesRef.current = [];
     force((n) => n + 1);
-  }, [cluster, ns, pod, container]);
+  }, [cluster, ns, kind, name, container]);
 
   useEffect(() => {
     if (!query.data) return;
-    const sample = readPodFromMetricsServer(query.data, pod, container);
+    // For Pod we read a single row by exact name; for Deployment / RS /
+    // StatefulSet / DaemonSet / Job we sum across every pod whose name
+    // matches the workload's controller-mint pattern. Same regex shape as
+    // the Prometheus path (see podSelectorFor) so the two sources show the
+    // same number for the same workload.
+    const sample = readWorkloadFromMetricsServer(query.data, kind, name, container);
     if (!sample) return;
     const arr = samplesRef.current.slice();
     const t = Math.floor(Date.now() / 1000);
@@ -495,7 +507,7 @@ function FallbackTimeSeries({
       samplesRef.current = arr;
       force((n) => n + 1);
     }
-  }, [query.data, pod, container]);
+  }, [query.data, kind, name, container]);
 
   const samples = samplesRef.current;
   // Convert to chart units: cpu millicores → cores, memory stays bytes.
@@ -732,9 +744,18 @@ function escapeRegex(v: string): string {
   return v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function readPodFromMetricsServer(
+// readWorkloadFromMetricsServer aggregates pod metrics for the focused
+// object. For a Pod it reads the single matching row; for a workload
+// (Deployment / ReplicaSet / StatefulSet / DaemonSet / Job) it sums every
+// pod whose name matches the controller-mint pattern.
+//
+// Returns null when the payload doesn't contain a single matching pod —
+// the caller treats null as "no sample yet, keep waiting" so the empty
+// state stays visible instead of dropping a zero into the chart.
+function readWorkloadFromMetricsServer(
   payload: any,
-  pod: string,
+  kind: string,
+  name: string,
   container?: string,
 ): { cpu: number; mem: number } | null {
   const items: any[] = Array.isArray(payload?.items)
@@ -742,14 +763,41 @@ function readPodFromMetricsServer(
     : payload?.metadata?.name
       ? [payload]
       : [];
-  const item = items.find((p) => p?.metadata?.name === pod);
-  if (!item) return null;
+  const matches = podMatcherFor(kind, name);
   let cpu = 0;
   let mem = 0;
-  for (const c of item.containers ?? []) {
-    if (container && c?.name !== container) continue;
-    cpu += cpuToMillicores(c?.usage?.cpu);
-    mem += memToBytes(c?.usage?.memory);
+  let matched = 0;
+  for (const item of items) {
+    const podName = item?.metadata?.name;
+    if (!podName || !matches(podName)) continue;
+    matched++;
+    for (const c of item.containers ?? []) {
+      if (container && c?.name !== container) continue;
+      cpu += cpuToMillicores(c?.usage?.cpu);
+      mem += memToBytes(c?.usage?.memory);
+    }
   }
-  return { cpu, mem };
+  return matched > 0 ? { cpu, mem } : null;
+}
+
+// podMatcherFor returns a predicate over pod names. Mirrors the regex
+// shape that podSelectorFor emits for the Prometheus path so that
+// "metrics-server fallback" and "Prometheus" report the same totals for
+// the same workload.
+//
+// - Pod: exact name match
+// - StatefulSet: "<name>-<ordinal>" (numeric suffix only)
+// - Deployment / ReplicaSet / DaemonSet / Job: "<name>-<podHash>" — any
+//   suffix made of lowercase alphanumerics + dashes is accepted, which
+//   covers Deployment "deploy-rsHash-podHash" too because rsHash is part
+//   of the matched suffix.
+function podMatcherFor(kind: string, name: string): (podName: string) => boolean {
+  if (!name) return () => false;
+  if (kind === "Pod") return (n) => n === name;
+  if (kind === "StatefulSet") {
+    const re = new RegExp(`^${escapeRegex(name)}-[0-9]+$`);
+    return (n) => re.test(n);
+  }
+  const re = new RegExp(`^${escapeRegex(name)}-[a-z0-9-]+$`);
+  return (n) => re.test(n);
 }
