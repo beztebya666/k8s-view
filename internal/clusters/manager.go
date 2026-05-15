@@ -41,6 +41,13 @@ type Manager struct {
 	clusters map[string]*Cluster
 	order    []string
 	current  string
+	// loadedFiles tracks the absolute paths of kubeconfig YAMLs already
+	// merged into m.clusters. LoadImported uses this to stay idempotent
+	// across repeated calls (startup → ImportKubeconfig → future fsnotify
+	// watcher); without it, re-reading the same file would rename every
+	// context to "<name>-2", "<name>-3", and so on. Mutated under m.mu so
+	// it can be inspected and updated atomically alongside m.clusters.
+	loadedFiles map[string]struct{}
 
 	wg sync.WaitGroup
 }
@@ -71,6 +78,7 @@ func NewManager(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*M
 		if err != nil {
 			return nil, err
 		}
+		c.origin = OriginInCluster
 		m.clusters[name] = c
 		m.order = []string{name}
 		m.current = name
@@ -120,6 +128,7 @@ func NewManager(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*M
 				zap.String("context", name), zap.Error(err))
 			continue
 		}
+		c.origin = OriginHostKubeconfig
 		m.clusters[name] = c
 		m.order = append(m.order, name)
 	}
@@ -199,6 +208,12 @@ type ClusterInfo struct {
 	// no").
 	Paused  bool   `json:"paused"`
 	Version string `json:"version,omitempty"`
+	// Origin is one of the OriginXxx constants in import.go — "imported",
+	// "in-cluster", "host-kubeconfig". Lets the picker badge clusters by
+	// source so the operator can spot (e.g.) the shared host-kubeconfig
+	// entry that the legacy single-device mode loads. Empty entries from
+	// older serialised state default to "imported" client-side.
+	Origin string `json:"origin,omitempty"`
 }
 
 func (m *Manager) List() []ClusterInfo {
@@ -211,6 +226,10 @@ func (m *Manager) List() []ClusterInfo {
 		if !ok {
 			continue
 		}
+		origin := c.Origin()
+		if origin == "" {
+			origin = OriginImported
+		}
 		out = append(out, ClusterInfo{
 			Name:       name,
 			Server:     c.RestConfig().Host,
@@ -219,6 +238,7 @@ func (m *Manager) List() []ClusterInfo {
 			Connected:  c.Connected(),
 			Paused:     c.Paused(),
 			Version:    c.Version(),
+			Origin:     origin,
 		})
 	}
 	return out

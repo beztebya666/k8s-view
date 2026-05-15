@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +31,7 @@ func (h *handlers) nodeShell(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	node := chi.URLParam(r, "name")
+	node := urlParam(r, "name")
 	if node == "" {
 		h.writeError(w, r, http.StatusBadRequest, fmt.Errorf("node name required"))
 		return
@@ -124,8 +123,8 @@ func (h *handlers) nodeShellCleanup(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	if ns == "" || name == "" {
 		h.writeError(w, r, http.StatusBadRequest, fmt.Errorf("namespace and name required"))
 		return

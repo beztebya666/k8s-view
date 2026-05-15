@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -33,8 +32,8 @@ func (h *handlers) podLogs(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
-	pod := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	pod := urlParam(r, "name")
 	q := r.URL.Query()
 
 	follow := q.Get("follow") != "false"

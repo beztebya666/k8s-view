@@ -14,6 +14,26 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+// Origin tags placed on Cluster.origin so the frontend can label rows in the
+// picker by where they came from. Kept as a small closed set on purpose —
+// new sources (SSO push, fleet sync) should add a constant here so the
+// frontend can extend its labeller without guessing.
+const (
+	// OriginImported is a kubeconfig imported via the UI or API into the
+	// per-identity directory (or the legacy ~/.k8s-view/imported on the
+	// single-device upgrade path before adoption).
+	OriginImported = "imported"
+	// OriginInCluster is the binary running inside Kubernetes, using its
+	// pod's service-account token. Shared across all identities because
+	// the credential is one-per-pod.
+	OriginInCluster = "in-cluster"
+	// OriginHostKubeconfig is the operator's local kubeconfig — loaded
+	// only by the legacy single-device NewManager path. Reserved as a
+	// distinct label so the UI can warn ("you're sharing the host's
+	// credential, anyone with this device cookie can see it").
+	OriginHostKubeconfig = "host-kubeconfig"
+)
+
 // LegacyImportedDir is the pre-multi-device location of imported kubeconfigs:
 // ~/.k8s-view/imported/. It still resolves so the Registry can adopt its
 // contents into the first device that visits after upgrade. New writes go to
@@ -50,8 +70,18 @@ func (m *Manager) importedDir() (string, error) {
 
 // LoadImported reads every kubeconfig file under the manager's imported
 // directory and registers its contexts as Clusters. Errors per-file are
-// logged but do not abort the rest. Idempotent — duplicate context names
-// get a numeric suffix.
+// logged but do not abort the rest.
+//
+// Idempotent on a per-file basis: a file already accepted by an earlier
+// call (tracked by absolute path in m.loadedFiles) is skipped, so the
+// caller is free to invoke LoadImported repeatedly — on startup, after
+// a UI-driven import, or from a future fsnotify watcher — without
+// duplicating clusters or shifting names ("foo" → "foo-2" → "foo-3").
+//
+// Duplicate context names *across files* still get the numeric-suffix
+// rename treatment in addContextsFromYAML; that's the only sane response
+// when two unrelated kubeconfigs both call their default context
+// "kubernetes-admin@kubernetes".
 func (m *Manager) LoadImported(ctx context.Context) {
 	dir, err := m.importedDir()
 	if err != nil {
@@ -75,14 +105,16 @@ func (m *Manager) LoadImported(ctx context.Context) {
 			m.logger.Warn("failed to read imported kubeconfig", zap.String("path", path), zap.Error(err))
 			continue
 		}
-		added, err := m.addContextsFromYAML(data, path)
+		added, err := m.addContextsFromYAML(data, path, OriginImported)
 		if err != nil {
 			m.logger.Warn("failed to load imported kubeconfig", zap.String("path", path), zap.Error(err))
 			continue
 		}
-		m.logger.Info("loaded imported kubeconfig",
-			zap.String("path", path),
-			zap.Strings("contexts", added))
+		if len(added) > 0 {
+			m.logger.Info("loaded imported kubeconfig",
+				zap.String("path", path),
+				zap.Strings("contexts", added))
+		}
 	}
 }
 
@@ -90,8 +122,19 @@ func (m *Manager) LoadImported(ctx context.Context) {
 // Cluster, and (when `persist` is true) writes the YAML to the imported
 // directory. Returns the names that were actually added — duplicates are
 // renamed to `<name>-2`, `<name>-3`, ... before being added.
+//
+// The in-memory registry is updated synchronously BEFORE the file write,
+// so /api/v1/clusters reflects the import on the very next HTTP turn —
+// no restart needed. If the persist step fails, the in-memory entries
+// stay (they'll be lost on the next process restart, but the user can
+// keep working with them in this session).
+//
+// When this Manager had no `current` cluster pointer (fresh identity),
+// the first successfully imported context becomes the default — so a
+// subsequent select/stream call against `current` does the right thing
+// without the frontend having to issue an explicit /select.
 func (m *Manager) ImportKubeconfig(_ context.Context, name string, yaml []byte, persist bool) ([]string, error) {
-	added, err := m.addContextsFromYAML(yaml, "<inline import>")
+	added, err := m.addContextsFromYAML(yaml, "", OriginImported)
 	if err != nil {
 		return nil, err
 	}
@@ -116,13 +159,28 @@ func (m *Manager) ImportKubeconfig(_ context.Context, name string, yaml []byte, 
 	if err := os.WriteFile(path, yaml, 0o600); err != nil {
 		return added, fmt.Errorf("write %s: %w", path, err)
 	}
+	// Record the path under the manager's lock so a concurrent LoadImported
+	// (e.g. fsnotify watcher firing on the write we just performed) won't
+	// re-add the same contexts under "<name>-2" names.
+	m.mu.Lock()
+	if m.loadedFiles == nil {
+		m.loadedFiles = make(map[string]struct{})
+	}
+	m.loadedFiles[path] = struct{}{}
+	m.mu.Unlock()
 	m.logger.Info("imported kubeconfig persisted",
 		zap.String("path", path),
 		zap.Strings("contexts", added))
 	return added, nil
 }
 
-func (m *Manager) addContextsFromYAML(data []byte, sourceLabel string) ([]string, error) {
+// addContextsFromYAML registers every context in the kubeconfig YAML as a
+// Cluster. `sourcePath` is the absolute file path the YAML was read from
+// (empty for inline imports) — it doubles as the dedupe key in
+// m.loadedFiles, so calling LoadImported repeatedly is a no-op once the
+// file is registered. `origin` tags every cluster added in this call so
+// the UI can label rows by source.
+func (m *Manager) addContextsFromYAML(data []byte, sourcePath, origin string) ([]string, error) {
 	cfg, err := clientcmd.Load(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse kubeconfig: %w", err)
@@ -138,6 +196,20 @@ func (m *Manager) addContextsFromYAML(data []byte, sourceLabel string) ([]string
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.loadedFiles == nil {
+		m.loadedFiles = make(map[string]struct{})
+	}
+	if sourcePath != "" {
+		if _, already := m.loadedFiles[sourcePath]; already {
+			return nil, nil
+		}
+	}
+
+	sourceLabel := sourcePath
+	if sourceLabel == "" {
+		sourceLabel = "<inline import>"
+	}
 
 	added := make([]string, 0, len(names))
 	for _, ctxName := range names {
@@ -170,11 +242,21 @@ func (m *Manager) addContextsFromYAML(data []byte, sourceLabel string) ([]string
 				zap.Error(err))
 			continue
 		}
+		c.origin = origin
 		m.clusters[assigned] = c
 		m.order = append(m.order, assigned)
 		added = append(added, assigned)
 	}
 	sort.Strings(m.order)
+	if sourcePath != "" && len(added) > 0 {
+		m.loadedFiles[sourcePath] = struct{}{}
+	}
+	// Pick the first imported cluster as the default if there isn't one
+	// yet — saves the UI an extra /select round-trip on the empty-state
+	// "first import" flow.
+	if m.current == "" && len(added) > 0 {
+		m.current = added[0]
+	}
 	return added, nil
 }
 
@@ -226,7 +308,16 @@ func (m *Manager) removeFromImportedFile(ctxName string) error {
 			userName = ctx.AuthInfo
 		}
 		if len(cfg.Contexts) <= 1 {
-			return os.Remove(path)
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+			// Drop the path from the loaded-files set so a future
+			// LoadImported (or a watcher that misses the unlink and
+			// re-reads it) won't think the file is still on the books.
+			m.mu.Lock()
+			delete(m.loadedFiles, path)
+			m.mu.Unlock()
+			return nil
 		}
 		// Rewrite without this context. If the cluster/user are no longer
 		// referenced by any remaining context, drop them too — keeps the

@@ -6,6 +6,7 @@
 // MessagePack edge cases for Kubernetes' dynamic objects.
 
 import { useEffect, useState } from "react";
+import { onClusterGone } from "./api";
 
 export type StreamFrame = {
   sid: number;
@@ -265,6 +266,15 @@ export function destroyClusterStream(cluster: string): void {
   streams.delete(cluster);
   bumpPool();
 }
+
+// Cross-wire the REST layer's 404 detector into the WebSocket pool. When
+// any REST call against a cluster returns 404 (the registry rejected the
+// name), tear down the cached WS too — otherwise the socket would keep
+// trying to reconnect against the same dead name, generating a fresh 409
+// every retry and littering the backend log.
+onClusterGone((cluster) => {
+  destroyClusterStream(cluster);
+});
 
 // useClusterConnected — pool-aware "is the live WS open?" hook. Compared to
 // a naive `useEffect(() => getClusterStream(cluster).onConnectionChange(...),

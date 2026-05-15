@@ -27,7 +27,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { TerminalLauncherPage } from "./pages/TerminalLauncherPage";
 import { PortForwardsPage } from "./pages/PortForwardsPage";
 import { YAMLEditorWarmup } from "./components/YAMLEditor";
-import { api, type ClusterInfo } from "./lib/api";
+import { api, onClusterGone, type ClusterInfo } from "./lib/api";
 import { useTabs } from "./stores/tabs";
 import { destroyClusterStream } from "./lib/stream";
 import { useApp } from "./stores/app";
@@ -86,6 +86,34 @@ export default function App() {
       useApp.getState().setCluster("");
     }
   }, [clusters, cluster]);
+
+  // Cluster-gone reaction: when the REST layer detects a 404 against a
+  // cluster-scoped path (registry rejected the name), drop every piece of
+  // per-cluster state the SPA still carries so the UI snaps back to the
+  // home shell instead of re-firing requests under the dead name. The
+  // stream pool subscribes to the same signal separately and tears down
+  // its WebSocket; we don't double-handle that here.
+  //
+  // Refetching /api/v1/clusters is what flips App into showClusterImport
+  // when the cluster list is now empty, and the App-level sweeper above
+  // closes any remaining tabs pinned to the gone cluster on the next
+  // render. The breaker in lib/api.ts holds for 3 s so any in-flight
+  // requests for the same name fail fast without hitting the network.
+  useEffect(() => {
+    return onClusterGone((gone) => {
+      // Capture "was-active" before forgetCluster clears the pointer, so we
+      // can decide whether to redirect to the home shell. forgetCluster
+      // already nulls state.cluster when it matches, so the order matters.
+      const wasActive = useApp.getState().cluster === gone;
+      useTabs.getState().closeForCluster(gone);
+      destroyClusterStream(gone);
+      useApp.getState().forgetCluster(gone);
+      if (wasActive) {
+        navigate("/", { replace: true });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["clusters"] });
+    });
+  }, [navigate, queryClient]);
 
   // Apply theme on first paint.
   useEffect(() => {

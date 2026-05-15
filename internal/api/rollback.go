@@ -37,7 +37,6 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/go-chi/chi/v5"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -91,8 +90,8 @@ func (h *handlers) listRollouts(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	if ns == "" || name == "" {
 		h.writeError(w, r, http.StatusBadRequest, errors.New("namespace and name are required"))
 		return
@@ -142,8 +141,8 @@ func (h *handlers) rollbackDeployment(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	if ns == "" || name == "" {
 		h.writeError(w, r, http.StatusBadRequest, errors.New("namespace and name are required"))
 		return

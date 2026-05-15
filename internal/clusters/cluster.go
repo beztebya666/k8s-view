@@ -28,6 +28,7 @@ import (
 // active per-GVR informers.
 type Cluster struct {
 	name    string
+	origin  string // see Origin() — populated by the Manager that owns this Cluster.
 	logger  *zap.Logger
 	restCfg *rest.Config
 
@@ -167,6 +168,13 @@ func (c *Cluster) checkConnectivity(parent context.Context) {
 }
 
 func (c *Cluster) Name() string                                  { return c.name }
+
+// Origin describes where this cluster came from — see the package-level
+// OriginXxx constants in import.go. Free-form string so future sources
+// (SSO-pushed kubeconfigs, fleet sync, etc.) plug in without a schema
+// change. Empty means "not tagged" and gets reported as "imported" to
+// the frontend by the Manager.
+func (c *Cluster) Origin() string                                { return c.origin }
 func (c *Cluster) Connected() bool                               { return c.connected.Load() }
 func (c *Cluster) Paused() bool                                  { return c.paused.Load() }
 func (c *Cluster) RestConfig() *rest.Config                      { return c.restCfg }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
@@ -38,8 +37,8 @@ func (h *handlers) podExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := chi.URLParam(r, "namespace")
-	pod := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	pod := urlParam(r, "name")
 	q := r.URL.Query()
 	container := q.Get("container")
 	cmd := q["command"]
@@ -129,8 +128,8 @@ func (h *handlers) podAttach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := chi.URLParam(r, "namespace")
-	pod := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	pod := urlParam(r, "name")
 	container := r.URL.Query().Get("container")
 
 	conn, err := execUpgrader.Upgrade(w, r, nil)

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -49,7 +48,10 @@ func (h *handlers) cluster(r *http.Request) (*clusters.Cluster, error) {
 	if err != nil {
 		return nil, err
 	}
-	name := chi.URLParam(r, "cluster")
+	name, err := urlParamStrict(r, "cluster")
+	if err != nil {
+		return nil, fmt.Errorf("invalid cluster name in URL: %w", err)
+	}
 	c, ok := mgr.Get(name)
 	if !ok {
 		return nil, fmt.Errorf("cluster %q not found", name)
@@ -58,14 +60,14 @@ func (h *handlers) cluster(r *http.Request) (*clusters.Cluster, error) {
 }
 
 func (h *handlers) gvr(r *http.Request) schema.GroupVersionResource {
-	g := chi.URLParam(r, "group")
+	g := urlParam(r, "group")
 	if g == "core" || g == "_" {
 		g = ""
 	}
 	return schema.GroupVersionResource{
 		Group:    g,
-		Version:  chi.URLParam(r, "version"),
-		Resource: chi.URLParam(r, "resource"),
+		Version:  urlParam(r, "version"),
+		Resource: urlParam(r, "resource"),
 	}
 }
 
@@ -143,7 +145,7 @@ func (h *handlers) removeCluster(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlParam(r, "name")
 	if err := mgr.Remove(name); err != nil {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
@@ -157,7 +159,7 @@ func (h *handlers) selectCluster(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlParam(r, "name")
 	if err := mgr.SetCurrent(name); err != nil {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
@@ -175,7 +177,7 @@ func (h *handlers) disconnectCluster(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlParam(r, "name")
 	if err := mgr.Disconnect(name); err != nil {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
@@ -192,7 +194,7 @@ func (h *handlers) connectCluster(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlParam(r, "name")
 	if err := mgr.Connect(r.Context(), name); err != nil {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
@@ -315,6 +317,43 @@ type LocalKubeconfigContextPublic struct {
 	CurrentContext bool   `json:"currentContext"`
 }
 
+// clusterVersion proxies the apiserver's `/version` discovery endpoint.
+// Returned shape matches Kubernetes' k8s.io/apimachinery/pkg/version.Info
+// (gitVersion, gitCommit, platform, …) so the frontend can show "v1.23.17"
+// in the cluster picker without parsing it itself. Cached server-side via
+// the discovery client; this handler is effectively free after warm-up.
+//
+// Surfacing this matters because the UI was previously firing GET
+// /api/v1/{cluster}/version on every cluster switch and getting a 404 —
+// chi's fallback frontend handler returned plain "404 page not found",
+// the browser console filled with errors, and the operator had no way to
+// tell what Kubernetes version they were looking at. Now the same route
+// returns a structured Info payload.
+func (h *handlers) clusterVersion(w http.ResponseWriter, r *http.Request) {
+	c, err := h.cluster(r)
+	if err != nil {
+		h.writeError(w, r, http.StatusNotFound, err)
+		return
+	}
+	info, err := c.Discovery().ServerVersion()
+	if err != nil {
+		// Cache the last known version on the Cluster object so a transient
+		// apiserver outage doesn't leave the UI labelled "unknown" — fall
+		// back to the cached string when we have one.
+		if cached := c.Version(); cached != "" {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"gitVersion": cached,
+				"cached":     true,
+				"error":      err.Error(),
+			})
+			return
+		}
+		h.writeError(w, r, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 func (h *handlers) apiResources(w http.ResponseWriter, r *http.Request) {
 	c, err := h.cluster(r)
 	if err != nil {
@@ -350,7 +389,7 @@ func (h *handlers) listResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gvr := h.gvr(r)
-	ns := chi.URLParam(r, "namespace")
+	ns := urlParam(r, "namespace")
 	var (
 		ri  = c.Dynamic().Resource(gvr)
 		out *unstructured.UnstructuredList
@@ -374,8 +413,8 @@ func (h *handlers) getResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gvr := h.gvr(r)
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	ri := c.Dynamic().Resource(gvr)
 	var obj *unstructured.Unstructured
 	if ns != "" {
@@ -397,8 +436,8 @@ func (h *handlers) applyResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gvr := h.gvr(r)
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.writeError(w, r, http.StatusBadRequest, err)
@@ -441,8 +480,8 @@ func (h *handlers) deleteResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gvr := h.gvr(r)
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 
 	policy := metav1.DeletePropagationBackground
 	if p := r.URL.Query().Get("propagation"); p != "" {
@@ -522,8 +561,8 @@ func (h *handlers) scale(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gvr := h.gvr(r)
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	replicasStr := r.URL.Query().Get("replicas")
 	replicas, err := strconv.ParseInt(replicasStr, 10, 32)
 	if err != nil {
@@ -547,8 +586,8 @@ func (h *handlers) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	gvr := h.gvr(r)
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	patch := fmt.Appendf(nil,
 		`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`,
 		metav1.Now().UTC().Format("2006-01-02T15:04:05Z"))
@@ -575,7 +614,7 @@ func (h *handlers) toggleCordon(w http.ResponseWriter, r *http.Request, value bo
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlParam(r, "name")
 	patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, value))
 	_, err = c.Clientset().CoreV1().Nodes().Patch(
 		r.Context(), name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
@@ -592,7 +631,7 @@ func (h *handlers) drain(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	name := chi.URLParam(r, "name")
+	name := urlParam(r, "name")
 	// Step 1: cordon
 	patch := []byte(`{"spec":{"unschedulable":true}}`)
 	if _, err := c.Clientset().CoreV1().Nodes().Patch(
@@ -636,8 +675,8 @@ func (h *handlers) evictPod(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	name := urlParam(r, "name")
 	if ns == "" || name == "" {
 		h.writeError(w, r, http.StatusBadRequest, fmt.Errorf("namespace and name are required"))
 		return
@@ -656,7 +695,7 @@ func (h *handlers) eventsByNamespace(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
+	ns := urlParam(r, "namespace")
 	if ns == "_all" {
 		ns = ""
 	}
@@ -678,7 +717,7 @@ func (h *handlers) podMetrics(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotImplemented, errors.New("metrics-server unavailable"))
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
+	ns := urlParam(r, "namespace")
 	if ns == "_all" {
 		ns = ""
 	}

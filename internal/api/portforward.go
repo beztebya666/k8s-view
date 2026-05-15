@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 	"k8s.io/client-go/tools/portforward"
@@ -33,8 +32,8 @@ func (h *handlers) podPortForward(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, http.StatusNotFound, err)
 		return
 	}
-	ns := chi.URLParam(r, "namespace")
-	pod := chi.URLParam(r, "name")
+	ns := urlParam(r, "namespace")
+	pod := urlParam(r, "name")
 
 	target, err := strconv.Atoi(r.URL.Query().Get("port"))
 	if err != nil || target <= 0 {

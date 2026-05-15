@@ -89,6 +89,11 @@ func NewRouter(d Deps) http.Handler {
 		r.Delete("/clusters/{name}", h.removeCluster)
 
 		r.Route("/{cluster}", func(r chi.Router) {
+			// Per-cluster apiserver version — proxies `k get --raw /version`
+			// via the discovery client. The UI hits this on cluster switch
+			// to label the picker; without it the same path falls through
+			// to the SPA fallback and the browser logs a 404 storm.
+			r.Get("/version", h.clusterVersion)
 			r.Get("/api-resources", h.apiResources)
 			r.Get("/namespaces", h.listNamespaces)
 
@@ -193,7 +198,7 @@ func (h *handlers) writeError(w http.ResponseWriter, r *http.Request, status int
 		zap.String("request_id", middleware.GetReqID(r.Context())),
 		zap.String("method", r.Method),
 		zap.String("path", r.URL.Path),
-		zap.String("cluster", chi.URLParam(r, "cluster")),
+		zap.String("cluster", urlParam(r, "cluster")),
 		zap.Int("status", status),
 		zap.Error(err),
 	}
