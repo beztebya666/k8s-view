@@ -609,7 +609,7 @@ sensitive comes from **Actions Secrets** only.
 
 | Workflow | Trigger | Output |
 |---|---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | every PR & push to `main` | builds the frontend + backend as a sanity gate; on `main` also publishes a **rolling `:beta`** multi-arch image (`:beta` and `:beta-<sha>`) |
+| [`ci.yml`](.github/workflows/ci.yml) | every PR & push to `main` | builds the frontend + backend as a sanity gate; on `main` also overwrites a single **rolling `:beta`** multi-arch image (no per-commit tags — `:beta` is always replaced in place) |
 | [`release.yml`](.github/workflows/release.yml) | tag `v*` **or** *Run workflow* | multi-arch `:vX.Y.Z` + `:latest` images **and** a GitHub Release with Linux/macOS/Windows binaries (amd64 + arm64) + `SHA256SUMS.txt` |
 
 The `:beta` tag is how testers run the work-in-progress **without ever

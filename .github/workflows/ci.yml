@@ -72,10 +72,14 @@ jobs:
       - name: Compute tags
         id: tags
         run: |
+          # One single moving tag — `:beta` is always overwritten in place so
+          # the registry never accumulates per-commit beta-<sha> tags. The
+          # commit short-sha still goes into the binary's --version string
+          # below for traceability; it just isn't minted as an image tag.
           short=$(git rev-parse --short HEAD)
-          tags="${GHCR_IMAGE}:beta,${GHCR_IMAGE}:beta-${short}"
+          tags="${GHCR_IMAGE}:beta"
           if [ "${HAS_DOCKERHUB}" = "true" ]; then
-            tags="${tags},${DOCKERHUB_IMAGE}:beta,${DOCKERHUB_IMAGE}:beta-${short}"
+            tags="${tags},${DOCKERHUB_IMAGE}:beta"
           fi
           echo "tags=${tags}" >> "$GITHUB_OUTPUT"
           echo "version=beta-${short}" >> "$GITHUB_OUTPUT"
