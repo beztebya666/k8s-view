@@ -95,6 +95,9 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # No provenance/SBOM attestation manifests — they only add extra
+          # "untagged" versions to the registry list.
+          provenance: false
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ steps.tags.outputs.version }}

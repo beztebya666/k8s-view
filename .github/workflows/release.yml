@@ -129,39 +129,40 @@ jobs:
         with:
           username: beztebya666
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Compute :beta tag
+      - name: Compute :version tags
         id: tags
         run: |
-          tags="${GHCR_IMAGE}:beta"
+          v="${{ needs.prep.outputs.version }}"
+          tags="${GHCR_IMAGE}:${v}"
           if [ "${HAS_DOCKERHUB}" = "true" ]; then
-            tags="${tags},${DOCKERHUB_IMAGE}:beta"
+            tags="${tags},${DOCKERHUB_IMAGE}:${v}"
           fi
           echo "tags=${tags}" >> "$GITHUB_OUTPUT"
-      - name: Build & push :beta first (amd64 + arm64)
-        # Push :beta first; the release tags are re-tagged off it below so
-        # they land newer and sort above :beta in the registry tag list.
+      - name: Build & push :version (amd64 + arm64)
+        # :beta is intentionally NOT touched here. It stays its own
+        # separate, older image — the last pre-release main build ci.yml
+        # pushed — so the registry shows :beta as a distinct entry,
+        # below the freshly built release tags.
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          # No provenance/SBOM attestation manifests — they show up as
+          # extra "untagged" versions in the registry for no real benefit.
+          provenance: false
           tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             VERSION=${{ needs.prep.outputs.version }}
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Re-tag :beta → :version, then :latest (ordered)
+      - name: Re-tag :version → :latest (no rebuild)
         run: |
           v="${{ needs.prep.outputs.version }}"
-          src="${GHCR_IMAGE}:beta"
-          docker buildx imagetools create -t "${GHCR_IMAGE}:${v}" "${src}"
+          docker buildx imagetools create -t "${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:${v}"
           if [ "${HAS_DOCKERHUB}" = "true" ]; then
-            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:${v}" "${src}"
-          fi
-          docker buildx imagetools create -t "${GHCR_IMAGE}:latest" "${src}"
-          if [ "${HAS_DOCKERHUB}" = "true" ]; then
-            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:latest" "${src}"
+            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:${v}"
           fi
 
   # Build the SPA exactly once and hand the embed-ready dist to every binary.
