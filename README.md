@@ -16,10 +16,10 @@ point it at a kubeconfig, and you're done.
 
 | | |
 |---|---|
-| **Latest release** | `v0.4.0` |
+| **Latest release** | `v0.4.1` |
 | **License** | Apache-2.0 |
-| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.4.0` |
-| **Docker Hub image** | `beztebya666/k8s-view:v0.4.0` |
+| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.4.1` |
+| **Docker Hub image** | `beztebya666/k8s-view:v0.4.1` |
 | **Build** | Go 1.22 + Node 20 |
 | **Compatible with** | Kubernetes 1.20 → 1.36 (`client-go` v0.31, dynamic discovery) |
 
@@ -84,7 +84,9 @@ point it at a kubeconfig, and you're done.
     `jobTemplate`) and **Suspend / Resume** for the schedule itself.
   - **Edit YAML** in a Monaco editor with a "Review diff" step before
     server-side apply; **Delete** with a confirm modal (foreground /
-    background propagation, force option).
+    background propagation). A distinct **Force delete**
+    (`--force --grace-period=0`) sits next to every Delete — row kebab,
+    bulk selection, and the detail-panel header.
   - **Copy kubectl** popover that emits a context-prefixed command for
     `get -o yaml`, `describe`, `logs`, `exec`, `port-forward`, etc.
   - **Pin to favourites** so the resource appears in the sidebar across
@@ -133,6 +135,10 @@ point it at a kubeconfig, and you're done.
 - Pod-level **CPU / Memory / Network / Filesystem** time-series in the
   side panel, with reference lines for `requests` and `limits` read from
   the live spec.
+- Node-level **CPU / Memory / Disk** time-series on the node detail page —
+  Prometheus `node-exporter` joined to the node name, with a live
+  `metrics-server` fallback for CPU/Memory and the node's `allocatable`
+  budget drawn as a reference line.
 - **Prometheus auto-discovery** — the backend probes for a `Service`
   matching `prometheus`/`kube-prometheus`/etc. and proxies PromQL when
   found; falls back to `metrics-server` for CPU/Memory and to "no metrics"
@@ -144,7 +150,8 @@ point it at a kubeconfig, and you're done.
 **Topology & policy visualisation.**
 - Service / Deployment / Pod **topology graph** in the side panel —
   shows owner chains, label-selected backends, and cross-namespace
-  references at a glance.
+  references at a glance; leaf Pod cards carry the running container
+  image tag so you read the deployed build straight from the graph.
 - **NetworkPolicy graph** that resolves ingress / egress rules into the
   pods they actually permit, with a clickable matrix view.
 - **GitOps source surfacing** — when a resource is owned by Argo CD or
@@ -195,10 +202,10 @@ you. Both carry the same digest.
 
 ```bash
 # GitHub Container Registry
-docker pull ghcr.io/beztebya666/k8s-view:v0.4.0
+docker pull ghcr.io/beztebya666/k8s-view:v0.4.1
 
 # Docker Hub
-docker pull beztebya666/k8s-view:v0.4.0
+docker pull beztebya666/k8s-view:v0.4.1
 ```
 
 `:latest` is also available on both and tracks the newest release.
@@ -211,7 +218,7 @@ docker run --rm -it \
   --network host \
   --security-opt label=disable \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
-  ghcr.io/beztebya666/k8s-view:v0.4.0
+  ghcr.io/beztebya666/k8s-view:v0.4.1
 ```
 
 For a kubeconfig that points at a routable API server, bridge networking
@@ -221,7 +228,7 @@ with a port publish is fine:
 docker run --rm -it \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
   -p 8080:8080 \
-  ghcr.io/beztebya666/k8s-view:v0.4.0
+  ghcr.io/beztebya666/k8s-view:v0.4.1
 ```
 
 `make docker-run` wraps the host-network form for local development.
@@ -259,7 +266,8 @@ works in shells, systemd units and pod specs.
 
 | Flag | Env | Default | Purpose |
 |---|---|---|---|
-| `--listen` | `K8SVIEW_LISTEN` | `:8080` | HTTP listen address. |
+| `--listen` | `K8SVIEW_LISTEN` | `:8080` | HTTP listen address. If the port is busy, the server falls back to a free one and logs the switch. |
+| `--open` | `K8SVIEW_OPEN` | auto | Open the dashboard in the default browser on startup. On for local runs, off in-cluster. |
 | `--kubeconfig` | `KUBECONFIG` | `~/.kube/config` | Kubeconfig path. Ignored when `--in-cluster` is set. |
 | `--in-cluster` | `K8SVIEW_IN_CLUSTER` | auto | Use the pod's ServiceAccount instead of a kubeconfig. Auto-detected by the presence of `/var/run/secrets/kubernetes.io/serviceaccount/token`. |
 | `--default-cluster` | `K8SVIEW_DEFAULT_CLUSTER` | `current-context` | Cluster selected on first load. |
@@ -491,9 +499,9 @@ make clean          # rm bin/ + frontend dist
 The version baked into the binary is set at build time:
 
 ```bash
-make build VERSION=v0.4.0
+make build VERSION=v0.4.1
 ./bin/k8s-view --help        # the help banner reflects the build version
-curl -s :8080/api/v1/version # {"version":"0.4.0","commit":"<short-sha>"}
+curl -s :8080/api/v1/version # {"version":"0.4.1","commit":"<short-sha>"}
 ```
 
 ---

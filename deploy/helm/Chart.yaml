@@ -9,8 +9,8 @@ description: |
 type: application
 # Chart version is bumped on every chart change.
 # appVersion tracks the binary release.
-version: 0.4.0
-appVersion: "v0.4.0"
+version: 0.4.1
+appVersion: "v0.4.1"
 kubeVersion: ">=1.20.0-0"
 home: https://github.com/beztebya666/k8s-view
 sources:
@@ -42,16 +42,14 @@ annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
     - kind: added
-      description: Log viewer — text-wrap, pretty-JSON and logfmt toggles, severity + structured-log coloring
+      description: Force delete (--force --grace-period=0) beside every Delete — row kebab, bulk selection, and the detail-panel header
     - kind: added
-      description: In-app back / forward navigation and a Home jump in the top bar
+      description: Node detail page metrics — CPU / Memory / Disk charts with Prometheus and metrics-server fallback
     - kind: added
-      description: Per-cluster environment tags (PROD badge) and custom icons (image upload / emoji / hue)
+      description: Topology — Pod cards now show the running container image tag; larger cards and wider columns
     - kind: added
-      description: Responsive layout — off-canvas sidebar drawer and full-screen detail panel on small screens
+      description: Auto-open the dashboard in the browser on startup, with a graceful fallback when the port is busy
     - kind: added
-      description: Node kubeadm actions — certificate renewal and version upgrade (control-plane-only, hard-guarded)
-    - kind: added
-      description: Group picker, CRD spec YAML, CRD row actions, and Secret type quick-filters
+      description: Multi-arch CI/CD — rolling :beta from main, tag/dispatch releases with amd64+arm64 images and Linux/macOS/Windows binaries
     - kind: fixed
-      description: node-shell waits for the container to be Running before exec; row kebab no longer closes on live refresh
+      description: WebSocket close-duration was logged as ~0 (time.Since evaluated at connect, not close)

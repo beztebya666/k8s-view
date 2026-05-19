@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IMAGE_NAME="k8s-view"
-IMAGE_TAG="v0.4.0"
+IMAGE_TAG="v0.4.1"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 KUBECONFIG_PATH="${HOME}/.kube/config"
 

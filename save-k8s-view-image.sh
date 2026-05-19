@@ -2,7 +2,7 @@
 set -euo pipefail
 
 IMAGE_NAME="${IMAGE_NAME:-k8s-view}"
-IMAGE_TAG="${IMAGE_TAG:-v0.4.0}"
+IMAGE_TAG="${IMAGE_TAG:-v0.4.1}"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 OUT_DIR="${OUT_DIR:-dist}"
 OUT_FILE="${OUT_FILE:-${OUT_DIR}/${IMAGE_NAME}-${IMAGE_TAG}.tar}"

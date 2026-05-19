@@ -12,7 +12,7 @@
 BIN          ?= bin/k8s-view
 GO           ?= go
 NPM          ?= npm
-VERSION      ?= v0.4.0
+VERSION      ?= v0.4.1
 COMMIT       ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 LDFLAGS      ?= -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 DOCKER_IMG   ?= ghcr.io/beztebya666/k8s-view:$(VERSION)
