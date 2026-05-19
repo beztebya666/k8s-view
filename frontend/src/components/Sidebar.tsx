@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import { ChevronDown, ChevronRight, FileUp, Folder, Plus, Search, Star, Terminal, X } from "lucide-react";
 import { api, type ClusterInfo } from "../lib/api";
-import { useApp } from "../stores/app";
+import { useApp, useClusterLabel } from "../stores/app";
 import { useTabs } from "../stores/tabs";
 import { notify_ } from "../lib/notifications";
 import { getClusterStream } from "../lib/stream";
@@ -212,6 +212,7 @@ function ClusterSidebarItem({
   onConnect: (name: string) => void;
 }) {
   const tint = useClusterColor(cluster.name);
+  const label = useClusterLabel(cluster.name);
   // Disconnected clusters: collapse the row to just its name + a Connect
   // affordance (Lens behaviour). Clicking the row doesn't expand sections,
   // doesn't auto-connect, and doesn't navigate — the user has to ask
@@ -238,7 +239,7 @@ function ClusterSidebarItem({
             filled={false}
             title={`${cluster.name} — disconnected`}
           />
-          <span className="min-w-0 flex-1 text-left truncate">{cluster.name}</span>
+          <span className="min-w-0 flex-1 text-left truncate">{label}</span>
           <span className="text-warn text-[9px] uppercase tracking-wider font-medium opacity-70 group-hover:opacity-100">
             disconnected
           </span>
@@ -262,7 +263,7 @@ function ClusterSidebarItem({
           filled={cluster.connected}
           title={cluster.connected ? "connected — click to customise icon" : "offline — click to customise icon"}
         />
-        <span className="min-w-0 flex-1 text-left truncate">{cluster.name}</span>
+        <span className="min-w-0 flex-1 text-left truncate">{label}</span>
         {cluster.version && (
           <span className="max-w-[68px] truncate text-[10px] text-fg-mute">{cluster.version}</span>
         )}
@@ -586,8 +587,11 @@ function customResourceTo(group: string, version: string, kind: string, namespac
 function FavouritesSection({ cluster }: { cluster: string }) {
   // useSyncExternalStore picks up additions from anywhere in the app and
   // (via the storage event in `lib/favourites`) cross-tab edits too.
-  useSyncExternalStore(subscribeFav, favSnapshot);
-  const items = useMemo(() => listFor(cluster), [cluster]);
+  // The snapshot MUST be a memo dependency — otherwise unpin/add mutate
+  // the store and re-render, but `listFor` stays frozen on the stale
+  // array and the list visibly "does nothing".
+  const snapshot = useSyncExternalStore(subscribeFav, favSnapshot);
+  const items = useMemo(() => listFor(cluster), [cluster, snapshot]);
   const [, setSearchParams] = useSearchParams();
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);

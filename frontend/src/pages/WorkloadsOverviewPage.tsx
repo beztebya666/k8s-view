@@ -11,6 +11,7 @@ import { Item, useResourceList } from "../lib/useResourceList";
 import { age } from "../lib/format";
 import { hrefToQuery } from "../components/DetailPanel";
 import { podDisplayStatus } from "../lib/podStatus";
+import { WorkloadTabsBar } from "../components/WorkloadTabsBar";
 
 type StatusKind = "ok" | "warn" | "bad" | "info" | "mute";
 
@@ -41,17 +42,6 @@ type EventItem = Item & {
   reportingController?: string;
   reportedBy?: string;
 };
-
-const WORKLOAD_TABS = [
-  { label: "Overview", route: "workloads" },
-  { label: "Pods", route: "pods" },
-  { label: "Deployments", route: "deployments" },
-  { label: "DaemonSets", route: "daemonsets" },
-  { label: "StatefulSets", route: "statefulsets" },
-  { label: "ReplicaSets", route: "replicasets" },
-  { label: "Jobs", route: "jobs" },
-  { label: "CronJobs", route: "cronjobs" },
-];
 
 export function WorkloadsOverviewPage() {
   const cluster = useApp((s) => s.cluster);
@@ -147,25 +137,7 @@ export function WorkloadsOverviewPage() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-bg">
-      <nav className="h-11 shrink-0 flex items-center justify-center gap-1 border-b border-line bg-bg-soft px-3 overflow-x-auto">
-        {WORKLOAD_TABS.map((tab) => {
-          const active = tab.route === "workloads";
-          return (
-            <button
-              key={tab.route}
-              className={clsx(
-                "h-full px-4 text-sm border-b-2 transition-colors whitespace-nowrap",
-                active
-                  ? "border-accent text-fg font-medium"
-                  : "border-transparent text-fg-mute hover:text-fg",
-              )}
-              onClick={() => navigate(clusterHref(cluster, tab.route))}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </nav>
+      <WorkloadTabsBar cluster={cluster} activeRoute="workloads" />
 
       <div className="flex-1 min-h-0 overflow-auto p-4">
         <section className="border border-line bg-bg-soft">

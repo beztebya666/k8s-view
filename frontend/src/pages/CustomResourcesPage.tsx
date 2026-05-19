@@ -12,10 +12,14 @@ import { useApp } from "../stores/app";
 import { ResourceTable } from "../components/ResourceTable";
 import { columnsFor } from "./columns";
 import { YAMLEditor } from "../components/YAMLEditor";
+import { CrdKebab } from "../components/CrdKebab";
+
+const KIND_GRID = "grid-cols-[minmax(220px,1.2fr)_minmax(180px,1fr)_100px_minmax(160px,1fr)_44px]";
 
 export function CustomResourcesPage() {
   const cluster = useApp((s) => s.cluster);
   const globalSearch = useApp((s) => s.search);
+  const apiGroup = useApp((s) => s.apiGroup);
   const [params, setParams] = useSearchParams();
   const gvr = params.get("gvr") ?? "";
   const namespaced = params.get("namespaced") === "true";
@@ -34,10 +38,11 @@ export function CustomResourcesPage() {
     const global = globalSearch.trim().toLowerCase();
     return (resources ?? [])
       .filter(isCustomAPIResource)
+      .filter((r) => !apiGroup || (r.group || "core") === apiGroup)
       .filter((r) => matchesAPIResource(r, global))
       .filter((r) => matchesAPIResource(r, text))
       .sort((a, b) => a.kind.localeCompare(b.kind));
-  }, [resources, filter, globalSearch]);
+  }, [resources, filter, globalSearch, apiGroup]);
 
   const groupedKinds = useMemo(() => {
     const groups = new Map<string, APIResource[]>();
@@ -80,11 +85,12 @@ export function CustomResourcesPage() {
         <div className="flex-1 min-h-0 overflow-auto">
           {!resources && <div className="p-4 text-sm text-fg-mute">loading...</div>}
           {resources && groupedKinds.length > 0 && (
-            <div className="sticky top-0 z-20 h-8 px-4 grid grid-cols-[minmax(220px,1.2fr)_minmax(180px,1fr)_100px_minmax(160px,1fr)] items-center gap-4 border-b border-line bg-bg text-[11px] uppercase tracking-wide text-fg-mute">
+            <div className={`sticky top-0 z-20 h-8 px-4 grid ${KIND_GRID} items-center gap-4 border-b border-line bg-bg text-[11px] uppercase tracking-wide text-fg-mute`}>
               <div>Kind</div>
               <div>API Version</div>
               <div>Scope</div>
               <div>Resource</div>
+              <div />
             </div>
           )}
           {groupedKinds.map(([group, items]) => (
@@ -94,14 +100,28 @@ export function CustomResourcesPage() {
                 <span>{items.length.toLocaleString()}</span>
               </div>
               <div className="divide-y divide-line/60">
-                {items.map((r) => (
-                  <button
+                {items.map((r) => {
+                  // Create-only kinds can't be listed — don't make the row
+                  // a drill-in that would just 404.
+                  const listable = (r.verbs ?? []).includes("list");
+                  const open = () => setParams({ gvr: `${r.group || ""}/${r.version}/${r.kind}`, namespaced: String(r.namespaced) });
+                  return (
+                  <div
                     key={`${r.group}-${r.version}-${r.kind}`}
-                    className="w-full min-h-11 px-4 grid grid-cols-[minmax(220px,1.2fr)_minmax(180px,1fr)_100px_minmax(160px,1fr)] items-center gap-4 text-left hover:bg-bg-mute transition-colors"
-                    onClick={() => setParams({ gvr: `${r.group || ""}/${r.version}/${r.kind}`, namespaced: String(r.namespaced) })}
+                    {...(listable ? {
+                      role: "button" as const,
+                      tabIndex: 0,
+                      onClick: open,
+                      onKeyDown: (e: React.KeyboardEvent) => {
+                        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+                      },
+                    } : {})}
+                    className={`group w-full min-h-11 px-4 grid ${KIND_GRID} items-center gap-4 text-left transition-colors ${
+                      listable ? "cursor-pointer hover:bg-bg-mute" : "cursor-default"
+                    }`}
                   >
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{r.kind}</div>
+                      <div className={clsx("font-medium truncate", !listable && "text-fg-soft")}>{r.kind}</div>
                       {r.shortNames && r.shortNames.length > 0 && (
                         <div className="text-xs text-fg-mute truncate">{r.shortNames.join(", ")}</div>
                       )}
@@ -110,9 +130,21 @@ export function CustomResourcesPage() {
                     <div className={clsx("text-xs", r.namespaced ? "text-accent" : "text-fg-mute")}>
                       {r.namespaced ? "Namespaced" : "Cluster"}
                     </div>
-                    <div className="font-mono text-xs text-fg-mute truncate">{r.name}</div>
-                  </button>
-                ))}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono text-xs text-fg-mute truncate">{r.name}</span>
+                      {!listable && (
+                        <span
+                          className="shrink-0 text-[9px] uppercase tracking-wider text-fg-mute border border-line rounded px-1 py-px"
+                          title="Create-only kind — the API server can't list it, so it isn't browsable."
+                        >
+                          not listable
+                        </span>
+                      )}
+                    </div>
+                    <CrdKebab cluster={cluster} crdName={`${r.name}.${r.group}`} />
+                  </div>
+                  );
+                })}
               </div>
             </section>
           ))}
@@ -192,7 +224,7 @@ const BUILT_IN_API_GROUPS = new Set([
   "storage.k8s.io",
 ]);
 
-function isCustomAPIResource(r: APIResource): boolean {
+export function isCustomAPIResource(r: APIResource): boolean {
   return !!r.group && !BUILT_IN_API_GROUPS.has(r.group);
 }
 

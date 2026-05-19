@@ -4,10 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { api, APIResource } from "../lib/api";
 import { useApp } from "../stores/app";
+import { CrdKebab } from "../components/CrdKebab";
+import { isCustomAPIResource } from "./CustomResourcesPage";
+
+const KIND_GRID = "grid-cols-[minmax(220px,1.2fr)_minmax(160px,1fr)_110px_minmax(160px,1fr)_44px]";
 
 export function APIResourcesPage() {
   const cluster = useApp((s) => s.cluster);
   const globalSearch = useApp((s) => s.search);
+  const apiGroup = useApp((s) => s.apiGroup);
   const { data, isLoading } = useQuery({
     enabled: !!cluster,
     queryKey: ["apiResources", cluster],
@@ -21,10 +26,11 @@ export function APIResourcesPage() {
     const f = filter.trim().toLowerCase();
     const global = globalSearch.trim().toLowerCase();
     return (data ?? [])
+      .filter((r) => !apiGroup || (r.group || "core") === apiGroup)
       .filter((r) => matchesAPIResource(r, global))
       .filter((r) => matchesAPIResource(r, f))
       .sort((a, b) => a.kind.localeCompare(b.kind));
-  }, [data, filter, globalSearch]);
+  }, [data, filter, globalSearch, apiGroup]);
 
   const grouped = useMemo(() => {
     const m = new Map<string, APIResource[]>();
@@ -63,11 +69,12 @@ export function APIResourcesPage() {
       <div className="flex-1 min-h-0 overflow-auto">
         {isLoading && <div className="p-4 text-fg-mute text-sm">loading...</div>}
         {!isLoading && grouped.length > 0 && (
-          <div className="sticky top-0 z-20 h-8 px-4 grid grid-cols-[minmax(220px,1.2fr)_minmax(160px,1fr)_110px_minmax(160px,1fr)] items-center gap-4 border-b border-line bg-bg text-[11px] uppercase tracking-wide text-fg-mute">
+          <div className={`sticky top-0 z-20 h-8 px-4 grid ${KIND_GRID} items-center gap-4 border-b border-line bg-bg text-[11px] uppercase tracking-wide text-fg-mute`}>
             <div>Kind</div>
             <div>API Version</div>
             <div>Scope</div>
             <div>Resource</div>
+            <div />
           </div>
         )}
         {grouped.map(([group, resources]) => (
@@ -77,17 +84,33 @@ export function APIResourcesPage() {
               <span>{resources.length.toLocaleString()}</span>
             </div>
             <div className="divide-y divide-line/60">
-              {resources.map((r) => (
-                <button
+              {resources.map((r) => {
+                // Some kinds (Binding, *Review, …) are create-only — the
+                // API server has no `list` verb for them, so drilling in
+                // would just 404. They're still listed (this page is the
+                // full API catalogue), but they aren't browsable.
+                const listable = (r.verbs ?? []).includes("list");
+                const drillIn = () => {
+                  const gvr = `${r.group || ""}/${r.version}/${r.kind}`;
+                  navigate(`/${encodeURIComponent(cluster)}/custom?gvr=${encodeURIComponent(gvr)}&namespaced=${r.namespaced}`);
+                };
+                return (
+                <div
                   key={`${r.group}-${r.version}-${r.kind}`}
-                  className="w-full min-h-11 px-4 grid grid-cols-[minmax(220px,1.2fr)_minmax(160px,1fr)_110px_minmax(160px,1fr)] items-center gap-4 text-left hover:bg-bg-mute transition-colors"
-                  onClick={() => {
-                    const gvr = `${r.group || ""}/${r.version}/${r.kind}`;
-                    navigate(`/${encodeURIComponent(cluster)}/custom?gvr=${encodeURIComponent(gvr)}&namespaced=${r.namespaced}`);
-                  }}
+                  {...(listable ? {
+                    role: "button" as const,
+                    tabIndex: 0,
+                    onClick: drillIn,
+                    onKeyDown: (e: React.KeyboardEvent) => {
+                      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); drillIn(); }
+                    },
+                  } : {})}
+                  className={`group w-full min-h-11 px-4 grid ${KIND_GRID} items-center gap-4 text-left transition-colors ${
+                    listable ? "cursor-pointer hover:bg-bg-mute" : "cursor-default"
+                  }`}
                 >
                   <div className="min-w-0">
-                    <div className="font-medium truncate">{r.kind}</div>
+                    <div className={`font-medium truncate ${listable ? "" : "text-fg-soft"}`}>{r.kind}</div>
                     {(r.shortNames?.length ?? 0) > 0 && (
                       <div className="text-xs text-fg-mute truncate">{r.shortNames!.join(", ")}</div>
                     )}
@@ -96,9 +119,23 @@ export function APIResourcesPage() {
                   <div className={r.namespaced ? "text-xs text-accent" : "text-xs text-fg-mute"}>
                     {r.namespaced ? "Namespaced" : "Cluster"}
                   </div>
-                  <div className="font-mono text-xs text-fg-mute truncate">{r.name}</div>
-                </button>
-              ))}
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-mono text-xs text-fg-mute truncate">{r.name}</span>
+                    {!listable && (
+                      <span
+                        className="shrink-0 text-[9px] uppercase tracking-wider text-fg-mute border border-line rounded px-1 py-px"
+                        title="Create-only kind — the API server can't list it, so it isn't browsable."
+                      >
+                        not listable
+                      </span>
+                    )}
+                  </div>
+                  {isCustomAPIResource(r)
+                    ? <CrdKebab cluster={cluster} crdName={`${r.name}.${r.group}`} />
+                    : <div />}
+                </div>
+                );
+              })}
             </div>
           </section>
         ))}

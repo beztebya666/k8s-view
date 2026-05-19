@@ -1,17 +1,17 @@
 // ResourceDetailPage — opens any resource by GVR + (optional namespace) + name.
 // Tabs: Summary / YAML / Events / Logs (pods only) / Exec (pods only).
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import * as YAML from "yaml";
 import clsx from "clsx";
 import {
-  ArrowLeft, RefreshCcw, Trash2, Activity, Pencil,
+  ArrowLeft, RefreshCcw, Trash2, Bell, Pencil,
   TerminalSquare, ScrollText, ChevronDown, Copy, Check, X,
   Info, Paperclip, Eye, EyeOff, KeyRound, Star, Scale, RotateCw, Pause, Play,
-  History,
+  History, Lock, ShieldOff, Power,
 } from "lucide-react";
 import { api, GVR } from "../lib/api";
 import { notify_ } from "../lib/notifications";
@@ -31,7 +31,7 @@ import { describe } from "../components/detail/describe";
 import { RolloutsTab } from "../components/detail/RolloutsTab";
 import { NetworkPolicyGraph } from "../components/detail/NetworkPolicyGraph";
 import { TopologyGraph } from "../components/detail/TopologyGraph";
-import { FileText } from "lucide-react";
+import { FileSearch } from "lucide-react";
 import { WorkloadMetrics } from "../components/charts/WorkloadMetrics";
 import {
   getSnapshot as favSnapshotRef,
@@ -101,6 +101,8 @@ export function ResourceDetailPage(props: DetailProps = {}) {
   const gvr: GVR = { group: group === "core" ? "" : group, version, resource };
   const isPod = group === "core" && resource === "pods";
   const isDeployment = group === "apps" && resource === "deployments";
+  const isNode = group === "core" && resource === "nodes";
+  const nodeShellSettings = useApp((s) => s.getClusterSettings(cluster));
   const { data: fetchedData, isLoading, error, refetch } = useQuery({
     enabled: !!cluster && !!resource && !!name,
     queryKey: ["resource", cluster, gvr, namespace, name],
@@ -296,6 +298,58 @@ spec:
     }
   };
 
+  // ---- Node operations (only wired up when this object is a Node) --------
+  const nodeCordoned = !!data?.spec?.unschedulable;
+  const onCordonToggle = async () => {
+    try {
+      if (nodeCordoned) {
+        await api.uncordon(cluster, name);
+        notify_.ok(`Uncordoned ${name}`, "Node is schedulable again.");
+      } else {
+        await api.cordon(cluster, name);
+        notify_.ok(`Cordoned ${name}`, "No new pods will be scheduled here.");
+      }
+      refetch();
+    } catch (e: any) {
+      notify_.bad(nodeCordoned ? "Uncordon failed" : "Cordon failed", e.message);
+    }
+  };
+  const onDrainNode = async () => {
+    const ok = await modals.confirm({
+      title: `Drain node ${name}?`,
+      body: "Every pod that isn't a DaemonSet or mirror pod will be evicted. The node is cordoned first.",
+      danger: true,
+      okLabel: "Drain",
+    });
+    if (!ok) return;
+    try {
+      const r = await api.drain(cluster, name);
+      notify_.ok(`Drained ${name}`, `Evicted ${r.evicted}, skipped ${r.skipped}.`);
+      refetch();
+    } catch (e: any) {
+      notify_.bad("Drain failed", e.message);
+    }
+  };
+  const onNodeShell = async () => {
+    try {
+      const created = await api.nodeShell(cluster, name, {
+        image: nodeShellSettings.nodeShellImage || undefined,
+        pullSecret: nodeShellSettings.nodeShellPullSecret || undefined,
+      });
+      notify_.info(`Spawning node-shell on ${name}`,
+        `Pod ${created.namespace}/${created.name} — opening exec…`);
+      bottom.push({
+        action: "exec",
+        cluster,
+        namespace: created.namespace,
+        name: created.name,
+        container: "shell",
+      });
+    } catch (e: any) {
+      notify_.bad("node-shell failed", e.message);
+    }
+  };
+
   if ((error || watchedPodMissing) && !data) {
     return (
       <div className="h-full flex flex-col min-w-0">
@@ -363,48 +417,50 @@ spec:
         {namespace && <span className="chip shrink-0">ns: {namespace}</span>}
         <span className="chip shrink-0">{(group === "core" ? "" : group + "/")}{version}/{resource}</span>
 
+        {/* Header actions, grouped left→right by intent so it doesn't read
+            as one undifferentiated row:
+              1. Views   — Summary, then the things you actually open most
+                           (Logs / Shell / Attach), then Events / Rollouts,
+                           and Describe last (it's the least-reached view).
+              2. Actions — edit / favourite / copy / scale / restart / …
+              3. Lifecycle — Refresh / Delete / Close.
+            Thin dividers separate the groups. */}
         <div className="ml-auto flex items-center gap-0.5 shrink-0 pl-2">
+          {/* — Group 1: views — */}
           <IconBtn active={tab === "summary"} onClick={() => goTab("summary")} title="Summary">
             <Info size={14} />
           </IconBtn>
+          {isPod && (
+            <IconBtn active={isBottomFor("logs")} onClick={() => toggleBottom("logs")} title="Pod logs">
+              <ScrollText size={14} />
+            </IconBtn>
+          )}
+          {isPod && (
+            <IconBtn active={isBottomFor("exec")} onClick={() => toggleBottom("exec")} title="Pod shell">
+              <TerminalSquare size={14} />
+            </IconBtn>
+          )}
+          {isPod && (
+            <IconBtn active={isBottomFor("attach")} onClick={() => toggleBottom("attach")} title="Attach to pod">
+              <Paperclip size={14} />
+            </IconBtn>
+          )}
           <IconBtn active={tab === "events"} onClick={() => goTab("events")} title="Events">
-            <Activity size={14} />
-          </IconBtn>
-          <IconBtn active={tab === "describe"} onClick={() => goTab("describe")} title="Describe (kubectl-style)">
-            <FileText size={14} />
+            <Bell size={14} />
           </IconBtn>
           {isDeployment && (
             <IconBtn active={tab === "rollouts"} onClick={() => goTab("rollouts")} title="Rollout history & rollback">
               <History size={14} />
             </IconBtn>
           )}
-          {isPod && (
-            <IconBtn
-              active={isBottomFor("logs")}
-              onClick={() => toggleBottom("logs")}
-              title="Pod logs"
-            >
-              <ScrollText size={14} />
-            </IconBtn>
-          )}
-          {isPod && (
-            <IconBtn
-              active={isBottomFor("exec")}
-              onClick={() => toggleBottom("exec")}
-              title="Pod shell"
-            >
-              <TerminalSquare size={14} />
-            </IconBtn>
-          )}
-          {isPod && (
-            <IconBtn
-              active={isBottomFor("attach")}
-              onClick={() => toggleBottom("attach")}
-              title="Attach to pod"
-            >
-              <Paperclip size={14} />
-            </IconBtn>
-          )}
+
+          <HeaderDivider />
+
+          {/* — Group 2: actions (Describe sits here too — it's a
+              secondary view, grouped with edit/favourite/copy) — */}
+          <IconBtn active={tab === "describe"} onClick={() => goTab("describe")} title="Describe (kubectl-style)">
+            <FileSearch size={14} />
+          </IconBtn>
           <IconBtn active={isYamlOpen} onClick={openYamlEdit} title="Edit YAML (opens in bottom pane)">
             <Pencil size={14} />
           </IconBtn>
@@ -417,7 +473,6 @@ spec:
               kind={data?.kind ?? prettyKind(gvr)}
             />
           )}
-          <span className="mx-1 h-5 w-px bg-line" aria-hidden />
           <CopyKubectlMenu
             cluster={cluster}
             namespace={namespace}
@@ -436,6 +491,25 @@ spec:
               <RotateCw size={14} />
             </IconBtn>
           )}
+          {isNode && (
+            <IconBtn
+              active={nodeCordoned}
+              onClick={onCordonToggle}
+              title={nodeCordoned ? "Uncordon (mark schedulable)" : "Cordon (mark unschedulable)"}
+            >
+              {nodeCordoned ? <ShieldOff size={14} /> : <Lock size={14} />}
+            </IconBtn>
+          )}
+          {isNode && (
+            <IconBtn danger onClick={onDrainNode} title="Drain node (evict pods)">
+              <Power size={14} />
+            </IconBtn>
+          )}
+          {isNode && (
+            <IconBtn onClick={onNodeShell} title="Open node shell">
+              <TerminalSquare size={14} />
+            </IconBtn>
+          )}
           {isCronJob && (
             <IconBtn onClick={onCronTriggerNow} title="Trigger now (create manual Job)">
               <Play size={14} />
@@ -450,6 +524,10 @@ spec:
               <Pause size={14} />
             </IconBtn>
           )}
+
+          <HeaderDivider />
+
+          {/* — Group 3: lifecycle — */}
           <IconBtn onClick={() => refetch()} title="Refresh">
             <RefreshCcw size={14} />
           </IconBtn>
@@ -1306,7 +1384,7 @@ function CopyKubectlMenu({
 
   return (
     <>
-      <IconBtn active={open} onClick={toggle} title="Copy kubectl command">
+      <IconBtn ref={btnRef} active={open} onClick={toggle} title="Copy kubectl command">
         <Copy size={14} />
       </IconBtn>
       {open && createPortal(
@@ -1349,17 +1427,24 @@ function singularFromResource(r: string): string {
   return r;
 }
 
-function IconBtn({
-  active, danger, onClick, title, children,
-}: {
+// Thin separator between the header's icon groups.
+function HeaderDivider() {
+  return <span className="mx-1 h-5 w-px bg-line shrink-0" aria-hidden />;
+}
+
+// forwardRef so callers like CopyKubectlMenu can anchor a popover to the
+// real <button>. Without the ref the menu's `btnRef` stayed null and its
+// `toggle` early-returned — that's why "Copy kubectl command" did nothing.
+const IconBtn = forwardRef<HTMLButtonElement, {
   active?: boolean;
   danger?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
-}) {
+}>(function IconBtn({ active, danger, onClick, title, children }, ref) {
   return (
     <button
+      ref={ref}
       className={clsx(
         "h-7 w-7 rounded-md flex items-center justify-center transition-colors",
         active && "bg-accent/15 text-accent",
@@ -1373,7 +1458,7 @@ function IconBtn({
       {children}
     </button>
   );
-}
+});
 
 function SummaryTab({ obj }: { obj: any }) {
   const labels = obj?.metadata?.labels ?? {};
@@ -1404,6 +1489,11 @@ function SummaryTab({ obj }: { obj: any }) {
       <Section title={`Annotations (${Object.keys(annotations).length})`} collapsible defaultOpen={Object.keys(annotations).length <= 6}>
         <KVList map={annotations} emptyText="no annotations" wrapValues />
       </Section>
+
+      {obj.spec && typeof obj.spec === "object" && !Array.isArray(obj.spec)
+        && Object.keys(obj.spec).length > 0 && (
+        <SpecSection spec={obj.spec} defaultOpen={!custom} />
+      )}
 
       {(obj.kind === "Secret" || obj.kind === "ConfigMap") && (
         <DataSection obj={obj} />
@@ -1440,6 +1530,28 @@ function SummaryTab({ obj }: { obj: any }) {
         </Section>
       )}
     </div>
+  );
+}
+
+// SpecSection — renders `.spec` as read-only YAML. Built-in kinds get
+// purpose-built summaries above, but CRD instances (and any kind we don't
+// special-case) would otherwise show nothing about what they actually
+// declare unless you opened the YAML tab — the gap the user hit. We use a
+// light <pre> (not Monaco) so the Summary tab stays cheap to render.
+function SpecSection({ spec, defaultOpen }: { spec: unknown; defaultOpen: boolean }) {
+  const yaml = useMemo(() => {
+    try {
+      return YAML.stringify(spec, { indent: 2, lineWidth: 0 });
+    } catch {
+      return String(spec);
+    }
+  }, [spec]);
+  return (
+    <Section title="Spec (YAML)" collapsible defaultOpen={defaultOpen}>
+      <pre className="px-3 py-2 text-[12px] leading-[18px] font-mono text-fg-soft overflow-x-auto max-h-[420px] overflow-y-auto whitespace-pre">
+        {yaml}
+      </pre>
+    </Section>
   );
 }
 

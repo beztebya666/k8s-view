@@ -16,10 +16,10 @@ point it at a kubeconfig, and you're done.
 
 | | |
 |---|---|
-| **Latest release** | `v0.3.0` |
+| **Latest release** | `v0.4.0` |
 | **License** | Apache-2.0 |
-| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.3.0` |
-| **Docker Hub image** | `beztebya666/k8s-view:v0.3.0` |
+| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.4.0` |
+| **Docker Hub image** | `beztebya666/k8s-view:v0.4.0` |
 | **Build** | Go 1.22 + Node 20 |
 | **Compatible with** | Kubernetes 1.20 → 1.36 (`client-go` v0.31, dynamic discovery) |
 
@@ -97,10 +97,12 @@ point it at a kubeconfig, and you're done.
 - Logs panel: multi-container selection, server-side initial tail (50 →
   20 000 lines), in-browser ring with a **Buffer** toggle to grow past
   the tail size up to a hard cap, **timestamps** and **pod-name** column
-  toggles, **previous container** dump, regex / case-sensitive **search**
-  with match counter and prev/next nav, filter mode, **Pause** /
-  **Resume**, **Clear**, **Following / Jump-to-present** anchor, and a
-  pop-out window to detach the tab into its own browser window.
+  toggles, **text-wrap**, **pretty-JSON** and **logfmt** toggles with
+  severity-aware line coloring, **previous container** dump, regex /
+  case-sensitive **search** with match counter and prev/next nav, filter
+  mode, **Pause** / **Resume**, **Clear**, **Following / Jump-to-present**
+  anchor, and a pop-out window to detach the tab into its own browser
+  window.
 - Cross-rollout pod history: when a pod ends and a new one is minted by
   the same controller, the logs tab offers a one-click jump to the
   predecessor's logs without losing the live tail.
@@ -116,6 +118,9 @@ point it at a kubeconfig, and you're done.
 - Each cluster gets a deterministic colour (FNV-1a hash of the name)
   used everywhere the UI needs to disambiguate which cluster an action
   applies to: the tab strip border, the cluster badge, the action chips.
+- **Environment tags & custom icons** — tag a cluster (e.g. `PROD`) and
+  the badge follows it onto every tab and the picker; give it an
+  uploaded image, an emoji, or a hue so production is unmistakable.
 - **Per-device session** — the dashboard issues a `kv_device` cookie on
   first visit so two browsers / devices keep separate cluster lists
   without a login wall. The legacy `~/.k8s-view/imported/` directory is
@@ -144,6 +149,16 @@ point it at a kubeconfig, and you're done.
   pods they actually permit, with a clickable matrix view.
 - **GitOps source surfacing** — when a resource is owned by Argo CD or
   Flux, the side panel shows the source repo / path / target revision.
+
+**Navigation & layout.**
+- Browser-style **back / forward** history plus a Home jump in the top bar.
+- **Responsive shell** — the sidebar collapses to an off-canvas drawer and
+  the detail panel goes full-screen on phones / narrow windows; tables
+  drop secondary columns instead of forcing a horizontal scroll.
+- Quick-filter strips for **Pod status** and **Secret type**; a **Group
+  picker** scopes the API-resources and CRD pages; CRD rows expose an
+  "Edit YAML / View definition" action and the detail panel renders a
+  resource's `spec` as YAML.
 
 **Built for scale.**
 - Frontend uses `@tanstack/react-virtual` end-to-end — the DOM only
@@ -180,10 +195,10 @@ you. Both carry the same digest.
 
 ```bash
 # GitHub Container Registry
-docker pull ghcr.io/beztebya666/k8s-view:v0.3.0
+docker pull ghcr.io/beztebya666/k8s-view:v0.4.0
 
 # Docker Hub
-docker pull beztebya666/k8s-view:v0.3.0
+docker pull beztebya666/k8s-view:v0.4.0
 ```
 
 `:latest` is also available on both and tracks the newest release.
@@ -196,7 +211,7 @@ docker run --rm -it \
   --network host \
   --security-opt label=disable \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
-  ghcr.io/beztebya666/k8s-view:v0.3.0
+  ghcr.io/beztebya666/k8s-view:v0.4.0
 ```
 
 For a kubeconfig that points at a routable API server, bridge networking
@@ -206,7 +221,7 @@ with a port publish is fine:
 docker run --rm -it \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
   -p 8080:8080 \
-  ghcr.io/beztebya666/k8s-view:v0.3.0
+  ghcr.io/beztebya666/k8s-view:v0.4.0
 ```
 
 `make docker-run` wraps the host-network form for local development.
@@ -379,6 +394,9 @@ group.
 | `GET` | `/{cluster}/rollouts/{namespace}/{name}` | Deployment revision history (owned ReplicaSets sorted by `deployment.kubernetes.io/revision`). |
 | `POST` | `/{cluster}/rollouts/{namespace}/{name}/rollback` | Roll a Deployment back to `{revision: N, changeCause?: "..."}` — kubectl-rollout-undo equivalent. |
 | `POST` | `/{cluster}/nodes/{name}/cordon` \| `/uncordon` \| `/drain` | Node lifecycle. |
+| `POST` | `/{cluster}/nodes/{name}/shell` | Spawn an ephemeral privileged node-shell pod; blocks until its container is Running. |
+| `POST` | `/{cluster}/nodes/{name}/kubeadm` | Control-plane `kubeadm` op (`certs-renew` / `upgrade`). Control-plane-only; requires a typed confirm token. |
+| `DELETE` | `/{cluster}/node-shell/{namespace}/{name}` | Tear down a node-shell pod. |
 | `GET` | `/{cluster}/events/{namespace}` | Recent events. |
 | `GET` | `/{cluster}/metrics/pods/{namespace}` | metrics-server pod metrics. |
 | `GET` | `/{cluster}/metrics/nodes` | metrics-server node metrics. |
@@ -473,9 +491,9 @@ make clean          # rm bin/ + frontend dist
 The version baked into the binary is set at build time:
 
 ```bash
-make build VERSION=0.3.0
+make build VERSION=v0.4.0
 ./bin/k8s-view --help        # the help banner reflects the build version
-curl -s :8080/api/v1/version # {"version":"0.3.0","commit":"<short-sha>"}
+curl -s :8080/api/v1/version # {"version":"0.4.0","commit":"<short-sha>"}
 ```
 
 ---

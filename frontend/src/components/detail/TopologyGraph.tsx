@@ -78,10 +78,17 @@ export function TopologyGraph({ obj }: { obj: any }) {
   const wantsJobs = kind === "CronJob";
   const wantsServices = kind === "Pod";
 
+  const wantsSlices = kind === "Service";
+
   const pods = useResourceList(cluster, "/v1/Pod", ns || undefined, { enabled: wantsPods && !!ns });
   const rss = useResourceList(cluster, "apps/v1/ReplicaSet", ns || undefined, { enabled: wantsRS && !!ns });
   const jobs = useResourceList(cluster, "batch/v1/Job", ns || undefined, { enabled: wantsJobs && !!ns });
   const services = useResourceList(cluster, "/v1/Service", ns || undefined, { enabled: wantsServices && !!ns });
+  // EndpointSlices are the authoritative answer to "what does this Service
+  // actually route to" — selector equality alone misses set-based
+  // selectors and manually-managed endpoints, which is why the Service
+  // topology came up empty before.
+  const slices = useResourceList(cluster, "discovery.k8s.io/v1/EndpointSlice", ns || undefined, { enabled: wantsSlices && !!ns });
 
   const layout = useMemo<Layout | null>(
     () => buildTopology(obj, kind, uid, ns, {
@@ -89,8 +96,9 @@ export function TopologyGraph({ obj }: { obj: any }) {
       rss: rss.items as any[],
       jobs: jobs.items as any[],
       services: services.items as any[],
+      slices: slices.items as any[],
     }),
-    [obj, kind, uid, ns, pods.items, rss.items, jobs.items, services.items],
+    [obj, kind, uid, ns, pods.items, rss.items, jobs.items, services.items, slices.items],
   );
 
   if (!layout) return null;
@@ -270,7 +278,7 @@ function buildTopology(
   kind: string,
   uid: string,
   ns: string,
-  data: { pods: any[]; rss: any[]; jobs: any[]; services: any[] },
+  data: { pods: any[]; rss: any[]; jobs: any[]; services: any[]; slices?: any[] },
 ): Layout | null {
   if (!obj || !kind) return null;
 
@@ -310,9 +318,48 @@ function buildTopology(
     right = data.pods.filter(ownedBy(jobUids)).map(nodeFor);
   } else if (kind === "Service") {
     middle = [me];
+    // Authoritative membership: pods named by this Service's
+    // EndpointSlices. Union with a plain selector match so pods that
+    // exist but aren't Ready (hence not in a slice yet) still show —
+    // that union is what makes the graph actually populate.
+    const svcName = obj?.metadata?.name ?? "";
+    const epPodNames = new Set<string>();
+    for (const sl of data.slices ?? []) {
+      const owns = (sl?.metadata?.labels ?? {})["kubernetes.io/service-name"] === svcName;
+      if (!owns) continue;
+      for (const ep of (sl?.endpoints ?? [])) {
+        const tr = ep?.targetRef;
+        if (tr?.kind === "Pod" && tr?.name) epPodNames.add(tr.name);
+      }
+    }
     const sel = obj?.spec?.selector;
-    if (sel && Object.keys(sel).length > 0) {
-      right = data.pods.filter((p) => labelMatches(p?.metadata?.labels ?? {}, sel)).map(nodeFor);
+    const selPods = sel && Object.keys(sel).length > 0
+      ? data.pods.filter((p) => labelMatches(p?.metadata?.labels ?? {}, sel))
+      : [];
+    const seen = new Set<string>();
+    const backing: any[] = [];
+    for (const p of data.pods) {
+      const nm = p?.metadata?.name;
+      if (!nm || seen.has(nm)) continue;
+      if (epPodNames.has(nm)) { seen.add(nm); backing.push(p); }
+    }
+    for (const p of selPods) {
+      const nm = p?.metadata?.name;
+      if (!nm || seen.has(nm)) continue;
+      seen.add(nm); backing.push(p);
+    }
+    right = backing.map(nodeFor);
+    // Left column = the distinct controllers behind those pods, so the
+    // Service isn't a context-free island ("…и т.д").
+    const ownerSeen = new Set<string>();
+    for (const p of backing) {
+      const o = (p?.metadata?.ownerReferences ?? []).find((r: any) => r.controller)
+        ?? (p?.metadata?.ownerReferences ?? [])[0];
+      if (!o?.kind || !o?.name) continue;
+      const k = `${o.kind}/${o.name}`;
+      if (ownerSeen.has(k)) continue;
+      ownerSeen.add(k);
+      left.push(ownerNode(o, ns));
     }
   } else if (kind === "Pod") {
     const owner = (obj?.metadata?.ownerReferences ?? []).find((o: any) => o.controller)

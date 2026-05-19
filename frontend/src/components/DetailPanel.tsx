@@ -14,6 +14,7 @@ import { useSearchParams } from "react-router-dom";
 import clsx from "clsx";
 import { X } from "lucide-react";
 import { ResourceDetailPage } from "../pages/ResourceDetailPage";
+import { useMediaQuery, NARROW_QUERY } from "../lib/ui";
 
 const STORAGE_KEY = "k8s-view:detail-panel-width";
 const MIN_WIDTH = 420;
@@ -110,6 +111,7 @@ export function LinkCell({
   return (
     <button
       type="button"
+      data-detail-trigger
       className={clsx("text-accent text-left truncate hover:text-accent/75 outline-none focus-visible:ring-1 focus-visible:ring-accent/40 rounded-sm", className)}
       title={title}
       onClick={(e) => {
@@ -162,6 +164,28 @@ export function DetailPanelHost() {
     return () => window.removeEventListener("keydown", onKey);
   }, [ref, close]);
 
+  // Click-away: a mousedown anywhere in the central content region that
+  // ISN'T a row / link that opens another resource dismisses the panel.
+  // Scoped to [data-content-region] on purpose — portaled menus that the
+  // detail page itself spawns (Select dropdowns, kebab) live on
+  // document.body, NOT inside the content column, so clicking them never
+  // collapses the panel out from under the user. Clicking a row or
+  // <LinkCell> ([data-detail-trigger]) switches the target instead of
+  // closing, so there's no close→reopen flicker.
+  useEffect(() => {
+    if (!ref) return;
+    const onPointer = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (!t || !t.isConnected) return;
+      if (t.closest("[data-detail-panel]")) return;
+      if (t.closest("[data-detail-trigger]")) return;
+      if (!t.closest("[data-content-region]")) return;
+      close();
+    };
+    window.addEventListener("mousedown", onPointer);
+    return () => window.removeEventListener("mousedown", onPointer);
+  }, [ref, close]);
+
   if (!ref) return null;
   // key forces a remount when switching to a different resource so any
   // local detail-page state (selected tab content, log buffers) resets.
@@ -194,6 +218,10 @@ function clampWidth(w: number): number {
 
 function DetailPanel({ target, onClose }: { target: DetailRef; onClose: () => void }) {
   const [width, setWidth] = useState<number>(readStoredWidth);
+  // On phones / narrow windows the resizable side-pane is unusable —
+  // it'd either crush the list to nothing or overflow the screen. There
+  // it becomes a full-screen sheet (close via X / Esc) instead.
+  const narrow = useMediaQuery(NARROW_QUERY);
 
   // Re-clamp when the viewport shrinks below the saved width.
   useEffect(() => {
@@ -233,13 +261,21 @@ function DetailPanel({ target, onClose }: { target: DetailRef; onClose: () => vo
 
   return (
     <aside
-      className="detail-panel-in relative shrink-0 border-l border-line bg-bg flex flex-col h-full"
-      style={{ width }}
+      data-detail-panel
+      className={clsx(
+        "detail-panel-in border-l border-line bg-bg flex flex-col",
+        narrow
+          ? "fixed inset-0 z-40 w-full h-full"
+          : "relative shrink-0 h-full",
+      )}
+      style={narrow ? undefined : { width }}
       role="complementary"
       aria-label="Resource detail"
     >
       {/* Resize handle: 6px hit area straddling the left edge with a 1px
-          accent line on hover. -ml-[3px] makes it overlap the border. */}
+          accent line on hover. -ml-[3px] makes it overlap the border.
+          Pointless on a full-screen sheet, so it's dropped when narrow. */}
+      {!narrow && (
       <div
         className="group absolute left-0 top-0 bottom-0 z-30 -ml-[3px] w-[6px] cursor-col-resize"
         onMouseDown={onResizeStart}
@@ -247,6 +283,7 @@ function DetailPanel({ target, onClose }: { target: DetailRef; onClose: () => vo
       >
         <div className="absolute inset-y-0 left-[3px] w-px bg-line group-hover:bg-accent transition-colors" />
       </div>
+      )}
 
       <ResourceDetailPage
         group={target.group}

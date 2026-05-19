@@ -9,8 +9,8 @@ description: |
 type: application
 # Chart version is bumped on every chart change.
 # appVersion tracks the binary release.
-version: 0.3.1
-appVersion: "v0.3.0"
+version: 0.4.0
+appVersion: "v0.4.0"
 kubeVersion: ">=1.20.0-0"
 home: https://github.com/beztebya666/k8s-view
 sources:
@@ -42,16 +42,16 @@ annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
     - kind: added
-      description: Deployment rollout history & one-click rollback action
+      description: Log viewer — text-wrap, pretty-JSON and logfmt toggles, severity + structured-log coloring
     - kind: added
-      description: Sortable Related-objects panel (Name / Status / Age)
+      description: In-app back / forward navigation and a Home jump in the top bar
     - kind: added
-      description: Per-device session model (kv_device cookie) + OIDC/LDAP provider hooks
+      description: Per-cluster environment tags (PROD badge) and custom icons (image upload / emoji / hue)
     - kind: added
-      description: Helm chart — HPA, PDB, NetworkPolicy, PVC for imported kubeconfigs, Secret for credentials
+      description: Responsive layout — off-canvas sidebar drawer and full-screen detail panel on small screens
     - kind: added
-      description: Helm chart — WebSocket-friendly Service/Ingress (sticky sessions, long-lived timeouts)
-    - kind: changed
-      description: metrics-server fallback now aggregates across every pod of a Deployment / RS / StatefulSet / DaemonSet / Job
+      description: Node kubeadm actions — certificate renewal and version upgrade (control-plane-only, hard-guarded)
+    - kind: added
+      description: Group picker, CRD spec YAML, CRD row actions, and Secret type quick-filters
     - kind: fixed
-      description: Workload metric kebab popover stayed open while the bottom-pane log tail kept appending lines
+      description: node-shell waits for the container to be Running before exec; row kebab no longer closes on live refresh

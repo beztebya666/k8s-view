@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { FileCode2, Lock, Power, Search, ShieldOff, TerminalSquare, X } from "lucide-react";
+import { ArrowUpCircle, FileCode2, KeyRound, Lock, Power, Search, ShieldOff, TerminalSquare, X } from "lucide-react";
 import { useApp } from "../stores/app";
 import { ResourceTable, WarningsToggle } from "../components/ResourceTable";
 import { columnsFor, issuesFor } from "./columns";
@@ -21,6 +21,75 @@ export function NodesPage() {
   const events = useEventIndex(cluster, true);
   const bottomPane = useBottomPane();
   const settings = useApp((s) => s.getClusterSettings(cluster));
+
+  // kubeadm ops are control-plane only and the most destructive thing in
+  // the app, so they're triple-gated: hidden on workers, a danger
+  // confirm explaining the blast radius, then a typed node-name prompt
+  // (the backend also rejects a mismatched confirm token).
+  const isControlPlane = (it: Item) =>
+    Object.keys(it.metadata?.labels ?? {}).some(
+      (k) => k === "node-role.kubernetes.io/control-plane" || k === "node-role.kubernetes.io/master",
+    );
+
+  const runKubeadm = useCallback(async (it: Item, op: "certs-renew" | "upgrade") => {
+    const node = it.metadata.name;
+    const ok = await modals.confirm({
+      title: op === "certs-renew" ? `Renew kubeadm certificates on ${node}?` : `kubeadm upgrade ${node}?`,
+      body: op === "certs-renew"
+        ? "Runs `kubeadm certs renew all` on the host, then bounces the control-plane static pods (apiserver / controller-manager / scheduler / etcd) so they pick up the new certs. The API server is briefly unavailable during the bounce. Control-plane node only."
+        : "Runs `kubeadm upgrade` on the host and restarts kubelet. This changes the control-plane version and is disruptive. Take an etcd backup first. Control-plane node only.",
+      danger: true,
+      okLabel: "Continue",
+    });
+    if (!ok) return;
+
+    let version: string | undefined;
+    if (op === "upgrade") {
+      const v = await modals.prompt({
+        title: `Target version for ${node}`,
+        default: "",
+        placeholder: "e.g. v1.30.2 — leave empty for `kubeadm upgrade node`",
+        okLabel: "Next",
+        validate: (s: string) => {
+          const t = s.trim();
+          if (!t) return null;
+          return /^v?\d+\.\d+\.\d+/.test(t) ? null : "Expected a version like v1.30.2";
+        },
+      });
+      if (v === null) return;
+      version = v.trim() || undefined;
+    }
+
+    const typed = await modals.prompt({
+      title: `Type "${node}" to confirm`,
+      default: "",
+      placeholder: node,
+      okLabel: op === "certs-renew" ? "Renew certificates" : "Run upgrade",
+      validate: (s: string) => (s.trim() === node ? null : "Type the exact node name to confirm."),
+    });
+    if (typed === null) return;
+
+    try {
+      const created = await api.nodeKubeadm(cluster, node, op, {
+        version,
+        image: settings.nodeShellImage || undefined,
+        pullSecret: settings.nodeShellPullSecret || undefined,
+      });
+      notify_.info(
+        op === "certs-renew" ? `Renewing certs on ${node}` : `kubeadm upgrade on ${node}`,
+        `Pod ${created.namespace}/${created.name} — opening logs…`,
+      );
+      bottomPane.push({
+        action: "logs",
+        cluster,
+        namespace: created.namespace,
+        name: created.name,
+        container: created.container,
+      });
+    } catch (e: any) {
+      notify_.bad("kubeadm action failed", e.message);
+    }
+  }, [cluster, settings.nodeShellImage, settings.nodeShellPullSecret, bottomPane]);
 
   // "Edit YAML" opens the right detail panel on the YAML tab — same panel
   // pattern used everywhere else, no full-screen page swap.
@@ -122,6 +191,12 @@ export function NodesPage() {
                   notify_.bad("node-shell failed", e.message);
                 }
               } },
+            { label: "Renew certs (kubeadm)", icon: KeyRound, danger: true,
+              hidden: (it: Item) => !isControlPlane(it),
+              onClick: (it: Item) => void runKubeadm(it, "certs-renew") },
+            { label: "Upgrade (kubeadm)", icon: ArrowUpCircle, danger: true,
+              hidden: (it: Item) => !isControlPlane(it),
+              onClick: (it: Item) => void runKubeadm(it, "upgrade") },
             { label: "Edit YAML", icon: FileCode2, onClick: editYaml },
           ]}
         />

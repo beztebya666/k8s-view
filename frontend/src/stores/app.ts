@@ -36,6 +36,16 @@ export type ClusterSettings = {
   iconLabel: string;
   /** Custom HSL hue 0-359, or -1 to use the deterministic hash colour. */
   iconHue: number;
+  /** Uploaded avatar as a downscaled data-URL (≤96px, persisted in
+   *  localStorage). Empty ⇒ fall back to iconLabel / initials. */
+  iconImage: string;
+  /** Free-text environment tag ("PROD", "staging", …). Empty ⇒ no badge.
+   *  Shown anywhere the cluster surfaces — picker, tabs — so a prod
+   *  cluster is impossible to mistake for a sandbox. */
+  tag: string;
+  /** Visual weight of the tag badge. Defaults to the loud red so the
+   *  common "this is PROD" case screams without extra config. */
+  tagTone: "bad" | "warn" | "ok" | "info" | "accent";
   lensMetrics: {
     prometheus: boolean;
     kubeStateMetrics: boolean;
@@ -60,6 +70,9 @@ export const DEFAULT_CLUSTER_SETTINGS: ClusterSettings = {
   showPodMetricsColumns: false,
   iconLabel: "",
   iconHue: -1,
+  iconImage: "",
+  tag: "",
+  tagTone: "bad",
   lensMetrics: {
     prometheus: false,
     kubeStateMetrics: false,
@@ -71,6 +84,10 @@ export type AppState = {
   cluster: string;
   namespace: string;             // "" means all namespaces
   namespaces: string[];           // [] means all namespaces; otherwise explicit multi-selection
+  /** API-group filter for the CRD/API-kind pages (Definitions, Browse,
+   *  API Resources) where a namespace selector is meaningless. "" means
+   *  all groups; "core" is the sentinel for the empty (core/v1) group. */
+  apiGroup: string;
   theme: Theme;
   search: string;
   clusterSettings: Record<string, Partial<ClusterSettings>>;
@@ -81,6 +98,7 @@ export type AppState = {
   setCluster: (c: string) => void;
   setNamespace: (n: string) => void;
   setNamespaces: (namespaces: string[]) => void;
+  setApiGroup: (g: string) => void;
   setTheme: (t: Theme) => void;
   setSearch: (s: string) => void;
   setLastPage: (cluster: string, page: string) => void;
@@ -100,6 +118,7 @@ export const useApp = create<AppState>()(
       cluster: "",
       namespace: "",
       namespaces: [],
+      apiGroup: "",
       theme: "dark",
       search: "",
       clusterSettings: {},
@@ -110,6 +129,7 @@ export const useApp = create<AppState>()(
         const unique = [...new Set(namespaces.filter(Boolean))].sort();
         set({ namespaces: unique, namespace: unique.length === 1 ? unique[0] : "" });
       },
+      setApiGroup: (apiGroup) => set({ apiGroup }),
       setTheme: (theme) => {
         document.documentElement.classList.toggle("light", theme === "light");
         document.documentElement.classList.toggle("dark", theme !== "light");
@@ -161,3 +181,16 @@ export const useApp = create<AppState>()(
     { name: "k8s-view:app" },
   ),
 );
+
+// useClusterLabel — the name to *display* for a cluster. `displayName`
+// (the "Cluster name" field in Settings) is a cosmetic override; the
+// registry name stays the routing identity. Everywhere a cluster name is
+// shown to the user — sidebar, picker, tabs, status bar — should go
+// through this so a rename actually sticks everywhere, not just on the
+// Settings page.
+export function useClusterLabel(name: string): string {
+  return useApp((s) => {
+    const d = s.clusterSettings[name]?.displayName;
+    return d && d.trim() ? d.trim() : name;
+  });
+}

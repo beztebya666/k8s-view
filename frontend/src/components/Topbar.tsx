@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileUp, Trash2, PlugZap, Unplug } from "lucide-react";
+import { Search, Sun, Moon, Wifi, WifiOff, ChevronDown, FilePen, Settings, FileUp, Trash2, PlugZap, Unplug, Menu } from "lucide-react";
 import clsx from "clsx";
 import { api, ClusterInfo } from "../lib/api";
-import { useApp } from "../stores/app";
+import { useApp, useClusterLabel } from "../stores/app";
 import { useTabs } from "../stores/tabs";
 import { getClusterStream, destroyClusterStream, useClusterConnected } from "../lib/stream";
 import { AddClusterModal } from "./AddClusterModal";
@@ -14,8 +14,15 @@ import { notify_ } from "../lib/notifications";
 import { clusterColor, useClusterColor } from "../lib/clusterColor";
 import { useBottomPane } from "./BottomPane";
 import { useDismiss } from "../lib/useDismiss";
+import { NavArrows } from "./NavArrows";
+import { ClusterTag } from "./ClusterTag";
+import { useUI } from "../lib/ui";
 
-type Menu = "cluster" | "ns" | null;
+type Menu = "cluster" | "ns" | "group" | null;
+
+// Pages that browse API *kinds* rather than namespaced objects — there a
+// namespace selector is meaningless, so the Topbar shows a Group picker.
+const GROUP_SCOPED_PAGES = new Set(["crds", "custom", "apis"]);
 
 export function Topbar() {
   const cluster = useApp((s) => s.cluster);
@@ -27,8 +34,18 @@ export function Topbar() {
   const theme = useApp((s) => s.theme);
   const setTheme = useApp((s) => s.setTheme);
   const settings = useApp((s) => s.getClusterSettings(cluster));
+  const apiGroup = useApp((s) => s.apiGroup);
+  const setApiGroup = useApp((s) => s.setApiGroup);
   const navigate = useNavigate();
+  const location = useLocation();
   const { cluster: routeCluster } = useParams();
+  const toggleSidebar = useUI((s) => s.toggleSidebar);
+  // Second path segment: /:cluster/<page>/...
+  const page = location.pathname.split("/").filter(Boolean)[1] ?? "";
+  // On /custom the Group picker only fits the kind list; once you drill
+  // into a kind (?gvr=…) you're browsing real objects → namespace picker.
+  const browsingInstances = page === "custom" && new URLSearchParams(location.search).has("gvr");
+  const groupMode = GROUP_SCOPED_PAGES.has(page) && !browsingInstances;
 
   // Single source of truth for which menu is open — opening one auto-closes
   // the other, so users never see two pickers stacked simultaneously.
@@ -77,7 +94,17 @@ export function Topbar() {
   }, [clusters, cluster, navigate]);
 
   return (
-    <div className="h-11 flex items-center gap-3 px-3 bg-bg-soft">
+    <div className="h-11 flex items-center gap-3 px-3 bg-bg-soft min-w-0">
+      <button
+        type="button"
+        className="h-7 w-7 grid place-items-center rounded-md text-fg-soft hover:text-fg hover:bg-bg-mute shrink-0"
+        onClick={toggleSidebar}
+        title="Toggle sidebar"
+        aria-label="Toggle sidebar"
+      >
+        <Menu size={15} />
+      </button>
+      <NavArrows />
       <ClusterPicker
         clusters={clusters ?? []}
         current={cluster}
@@ -192,20 +219,30 @@ export function Topbar() {
         }}
       />
 
-      <NamespacePicker
-        value={selectedNamespaces}
-        namespaces={mergeNamespaces(namespaceList ?? [], settings.accessibleNamespaces)}
-        open={openMenu === "ns"}
-        onOpen={(o) => setOpenMenu(o ? "ns" : null)}
-        onChange={setNamespaces}
-      />
+      {groupMode ? (
+        <GroupPicker
+          cluster={cluster}
+          value={apiGroup}
+          open={openMenu === "group"}
+          onOpen={(o) => setOpenMenu(o ? "group" : null)}
+          onChange={setApiGroup}
+        />
+      ) : (
+        <NamespacePicker
+          value={selectedNamespaces}
+          namespaces={mergeNamespaces(namespaceList ?? [], settings.accessibleNamespaces)}
+          open={openMenu === "ns"}
+          onOpen={(o) => setOpenMenu(o ? "ns" : null)}
+          onChange={setNamespaces}
+        />
+      )}
 
       <div className="flex-1" />
 
-      <div className="relative">
+      <div className="relative shrink-0">
         <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-mute" />
         <input
-          className="input pl-7 w-[280px]"
+          className="input pl-7 w-[clamp(140px,22vw,280px)]"
           placeholder="Global search..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -274,6 +311,83 @@ function mergeNamespaces(apiNamespaces: string[], manualNamespaces: string[]) {
   return [...new Set([...apiNamespaces, ...manualNamespaces])].sort();
 }
 
+// GroupPicker — the Topbar selector shown instead of the namespace picker
+// on the CRD / API-kind pages. Single-select; "" = all groups, "core" is
+// the empty (core/v1) group. Group list is derived from the same
+// api-resources query the pages use, so the React-Query cache is shared.
+function GroupPicker({
+  cluster, value, onChange, open, onOpen,
+}: {
+  cluster: string;
+  value: string;
+  onChange: (g: string) => void;
+  open: boolean;
+  onOpen: (o: boolean) => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [filter, setFilter] = useState("");
+  useDismiss(ref, open, () => onOpen(false));
+  useEffect(() => { if (!open) setFilter(""); }, [open]);
+
+  const { data: resources } = useQuery({
+    enabled: !!cluster,
+    queryKey: ["apiResources", cluster],
+    queryFn: () => api.apiResources(cluster),
+    staleTime: 60_000,
+  });
+  const groups = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of resources ?? []) set.add(r.group || "core");
+    return [...set].sort((a, b) => (a === "core" ? -1 : b === "core" ? 1 : a.localeCompare(b)));
+  }, [resources]);
+  const f = filter.toLowerCase();
+  const visible = groups.filter((g) => g.toLowerCase().includes(f));
+
+  return (
+    <div className="relative" ref={ref}>
+      <button className="btn" onClick={() => onOpen(!open)}>
+        group: <span className="font-medium max-w-[180px] truncate">{value || "all"}</span>
+        <ChevronDown size={12} className={clsx("transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-9 z-30 w-[320px] bg-bg-soft border border-line rounded-md shadow-xl py-1">
+          <input
+            autoFocus
+            className="input w-[calc(100%-12px)] mx-1.5 mb-1"
+            placeholder="filter groups…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <button
+            className={clsx("w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-bg-mute",
+              value === "" && "bg-bg-mute text-accent")}
+            onClick={() => { onChange(""); onOpen(false); }}
+          >
+            <input className="kv-checkbox" type="checkbox" checked={value === ""} readOnly tabIndex={-1} />
+            <span className="text-left">All groups</span>
+          </button>
+          <div className="max-h-[300px] overflow-y-auto">
+            {visible.map((g) => (
+              <button
+                key={g}
+                className={clsx("w-full flex items-center gap-2 px-3 py-1.5 hover:bg-bg-mute font-mono text-xs",
+                  value === g && "bg-bg-mute text-accent")}
+                onClick={() => { onChange(g); onOpen(false); }}
+              >
+                <input className="kv-checkbox" type="checkbox" checked={value === g} readOnly tabIndex={-1} />
+                <span className="min-w-0 flex-1 text-left truncate">{g}</span>
+              </button>
+            ))}
+            {visible.length === 0 && (
+              <div className="px-3 py-2 text-xs text-fg-mute">no groups</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ClusterPicker({
   clusters, current, onSelect, open, onOpen, onAdd, onRemove, onDisconnect, onConnect,
 }: {
@@ -288,6 +402,7 @@ function ClusterPicker({
   useDismiss(ref, open, () => onOpen(false));
   const cur = clusters.find((c) => c.name === current);
   const curTint = useClusterColor(current || "");
+  const currentLabel = useClusterLabel(current);
   return (
     <div className="relative" ref={ref}>
       <button className="btn" onClick={() => onOpen(!open)}>
@@ -298,7 +413,8 @@ function ClusterPicker({
             border: cur?.connected ? "none" : `1px solid ${curTint.hsl}`,
           }}
         />
-        <span className="font-medium truncate max-w-[180px]">{current || "no cluster"}</span>
+        <span className="font-medium truncate max-w-[180px]">{current ? currentLabel : "no cluster"}</span>
+        {current && <ClusterTag cluster={current} />}
         <ChevronDown size={12} className={clsx("transition-transform", open && "rotate-180")} />
       </button>
       {open && (
@@ -348,6 +464,7 @@ function ClusterRow({
   onConnect: () => void;
 }) {
   const tint = useClusterColor(info.name);
+  const label = useClusterLabel(info.name);
   // Three visible dot states:
   //   • filled        — connected (the apiserver answered the last probe)
   //   • outlined      — unreachable (apiserver didn't answer; usually a
@@ -373,8 +490,9 @@ function ClusterRow({
       >
         <span className="w-2 h-2 rounded-full shrink-0" style={dotStyle} />
         <span className={clsx("flex-1 text-left truncate", info.paused && "text-fg-mute")}>
-          {info.name}
+          {label}
         </span>
+        <ClusterTag cluster={info.name} size="xs" />
         {info.paused
           ? <span className="text-warn text-[9px] uppercase tracking-wider font-medium">disconnected</span>
           : <span className="text-fg-mute text-[10px]">{info.version || "—"}</span>}

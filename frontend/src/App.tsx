@@ -7,6 +7,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Topbar } from "./components/Topbar";
 import { TopTabs, useTabsRouterSync } from "./components/TopTabs";
 import { DetailPanelHost } from "./components/DetailPanel";
+import { NavStackRecorder } from "./components/NavArrows";
 import { BottomPaneHost } from "./components/BottomPane";
 import { StatusBar } from "./components/StatusBar";
 import { CommandPalette } from "./components/CommandPalette";
@@ -31,6 +32,7 @@ import { api, onClusterGone, type ClusterInfo } from "./lib/api";
 import { useTabs } from "./stores/tabs";
 import { destroyClusterStream } from "./lib/stream";
 import { useApp } from "./stores/app";
+import { useUI, useMediaQuery, NARROW_QUERY } from "./lib/ui";
 import { SECTIONS } from "./nav/sections";
 import { favouriteAt } from "./lib/favourites";
 import { refToQuery } from "./components/DetailPanel";
@@ -220,6 +222,7 @@ export default function App() {
   return (
     <>
       <YAMLEditorWarmup />
+      <NavStackRecorder />
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/:cluster/*" element={<ClusterShell />} />
@@ -351,6 +354,13 @@ function ClusterShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [sidebarWidth, setSidebarWidth] = useState(() => readSidebarWidth());
+  const narrow = useMediaQuery(NARROW_QUERY);
+  const sidebarOpen = useUI((s) => s.sidebarOpen);
+  const setSidebarOpen = useUI((s) => s.setSidebarOpen);
+  // Collapse to a drawer when the viewport gets narrow, restore the
+  // permanent column when it grows back. Fires on the breakpoint flip
+  // only, so a manual toggle within one size class is respected.
+  useEffect(() => { setSidebarOpen(!narrow); }, [narrow, setSidebarOpen]);
 
   // Hard guard against entering a disconnected cluster's route. Without
   // this, a stale tab restored from localStorage, the browser back button,
@@ -430,8 +440,9 @@ function ClusterShell() {
       <TopTabs />
       <div
         className="grid grid-rows-[44px_1fr] flex-1 min-h-0"
-        style={{ gridTemplateColumns: `${sidebarWidth}px minmax(0, 1fr)` }}
+        style={{ gridTemplateColumns: `${(!narrow && sidebarOpen) ? sidebarWidth : 0}px minmax(0, 1fr)` }}
       >
+      {!narrow && sidebarOpen && (
       <div className="row-span-2 relative border-r border-line bg-bg-soft overflow-hidden">
         <Sidebar onNavigate={(to) => navigate(`/${encodeURIComponent(cluster)}/${to}`)} />
         <div
@@ -442,12 +453,13 @@ function ClusterShell() {
           onPointerDown={startSidebarResize}
         />
       </div>
-      <div className="border-b border-line">
+      )}
+      <div className="col-start-2 row-start-1 border-b border-line">
         <Topbar />
       </div>
-      <div className="overflow-hidden flex flex-col min-w-0 min-h-0">
+      <div className="col-start-2 row-start-2 overflow-hidden flex flex-col min-w-0 min-h-0">
         <div className="flex-1 flex min-h-0 min-w-0">
-        <main className="flex-1 min-w-0 overflow-hidden">
+        <main className="flex-1 min-w-0 overflow-hidden" data-content-region>
         <Routes>
           <Route path="overview" element={<OverviewPage />} />
           <Route path="applications" element={<ApplicationsPage />} />
@@ -499,6 +511,18 @@ function ClusterShell() {
         <BottomPaneHost />
       </div>
       </div>
+      {narrow && sidebarOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40 bg-black/60"
+            onClick={() => setSidebarOpen(false)}
+            aria-hidden
+          />
+          <div className="fixed inset-y-0 left-0 z-50 w-[min(86vw,300px)] border-r border-line bg-bg-soft overflow-hidden shadow-2xl detail-panel-in">
+            <Sidebar onNavigate={(to) => { navigate(`/${encodeURIComponent(cluster)}/${to}`); setSidebarOpen(false); }} />
+          </div>
+        </>
+      )}
       <StatusBar />
       <CommandPalette />
       <Toasts />

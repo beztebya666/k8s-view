@@ -1,28 +1,15 @@
 // ClusterBadge — small clickable circle that doubles as the cluster's
 // visual identity (Lens shows the same: a coloured pill in the cluster
-// row). Clicking opens a tiny popover where the user can swap the icon
-// label (single emoji or 1-3 letter initials) and pick a hue from a
-// preset palette. Both customisations persist via `clusterSettings`,
-// which is already part of the zustand store and so survives reloads.
-//
-// Why not Lens-style image upload: a web-deployed dashboard can't write
-// arbitrary blobs to per-user storage cheaply, and emoji+colour cover
-// 95% of the "I want to tell my prod cluster apart from staging" use
-// cases without a server-side asset bucket.
+// row). Clicking opens a popover where the user can set an uploaded
+// image, an emoji/initials label, and a hue. All of it persists via
+// `clusterSettings` in the zustand store, so it survives reloads.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
-import { clusterColor, useClusterColor } from "../lib/clusterColor";
+import { useClusterColor } from "../lib/clusterColor";
 import { useApp } from "../stores/app";
-
-const HUE_PRESETS = [
-  -1, // "auto" (deterministic from name)
-  0, 18, 36, 54,
-  78, 120, 150,
-  180, 200, 220, 240,
-  270, 300, 330,
-];
+import { IconEditorBody } from "./IconEditor";
 
 interface Props {
   name: string;
@@ -40,9 +27,9 @@ interface Props {
 
 export function ClusterBadge({ name, size = 14, editable = true, className, filled = true, title }: Props) {
   const settings = useApp((s) => s.getClusterSettings(name));
-  const setClusterSettings = useApp((s) => s.setClusterSettings);
   const tint = useClusterColor(name);
   const label = settings.iconLabel.trim();
+  const image = settings.iconImage;
   const fontSize = Math.max(8, Math.floor(size * 0.55));
 
   const [open, setOpen] = useState(false);
@@ -56,7 +43,11 @@ export function ClusterBadge({ name, size = 14, editable = true, className, fill
     e.stopPropagation();
     if (open) { setOpen(false); return; }
     const r = (ref.current as HTMLElement).getBoundingClientRect();
-    setPos({ left: r.left, top: r.bottom + 6 });
+    // Keep the 284px-tall popover on-screen near the viewport edges.
+    setPos({
+      left: Math.max(8, Math.min(r.left, window.innerWidth - 296)),
+      top: Math.min(r.bottom + 6, window.innerHeight - 300),
+    });
     setOpen(true);
   };
 
@@ -69,71 +60,35 @@ export function ClusterBadge({ name, size = 14, editable = true, className, fill
         title={title ?? (editable ? "Customise icon" : name)}
         aria-label={editable ? `Customise ${name} icon` : name}
         className={clsx(
-          "shrink-0 inline-flex items-center justify-center rounded-full leading-none",
+          "shrink-0 inline-flex items-center justify-center rounded-full leading-none overflow-hidden",
           editable ? "cursor-pointer" : "cursor-default",
           className,
         )}
         style={{
           width: size,
           height: size,
-          background: filled ? tint.hsl : "transparent",
-          border: filled ? "none" : `1px solid ${tint.hsl}`,
+          background: image ? "transparent" : filled ? tint.hsl : "transparent",
+          border: !image && filled ? "none" : `1px solid ${tint.hsl}`,
           color: filled ? "rgb(var(--bg))" : tint.hsl,
           fontSize,
           fontWeight: 600,
         }}
       >
-        {label && <span>{label.slice(0, 3)}</span>}
+        {image
+          ? <img src={image} alt="" className="h-full w-full object-cover" />
+          : label
+            ? <span>{label.slice(0, 3)}</span>
+            : null}
       </button>
       {open && pos && createPortal(
         <div
-          className="fixed z-[1000] rounded-md border border-line bg-bg-soft shadow-[0_18px_48px_rgb(0_0_0/0.55)] p-3 w-[260px]"
+          className="fixed z-[1000] rounded-md border border-line bg-bg-soft shadow-[0_18px_48px_rgb(0_0_0/0.55)] p-3"
           style={{ left: pos.left, top: pos.top }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="text-[10px] uppercase tracking-wider text-fg-mute mb-1.5">Icon label</div>
-          <input
-            className="input h-7 w-full text-xs font-mono"
-            placeholder="emoji or initials (max 3)"
-            value={settings.iconLabel}
-            maxLength={6}
-            onChange={(e) => setClusterSettings(name, { iconLabel: e.target.value })}
-          />
-          <div className="mt-3 text-[10px] uppercase tracking-wider text-fg-mute mb-1.5">Hue</div>
-          <div className="grid grid-cols-8 gap-1">
-            {HUE_PRESETS.map((hue) => {
-              const swatch = clusterColor(name, hue >= 0 ? hue : undefined);
-              const active = settings.iconHue === hue;
-              return (
-                <button
-                  key={hue}
-                  type="button"
-                  className={clsx(
-                    "h-6 rounded-sm border",
-                    active ? "border-fg" : "border-line/60 hover:border-fg-soft",
-                  )}
-                  style={{ background: hue < 0 ? "transparent" : swatch.hsl }}
-                  onClick={() => setClusterSettings(name, { iconHue: hue })}
-                  title={hue < 0 ? "Auto (from name)" : `hue ${hue}°`}
-                >
-                  {hue < 0 && <span className="text-[10px] text-fg-soft font-mono">auto</span>}
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-3 flex justify-between">
-            <button
-              type="button"
-              className="text-[11px] text-fg-mute hover:text-fg"
-              onClick={() => setClusterSettings(name, { iconLabel: "", iconHue: -1 })}
-            >
-              Reset
-            </button>
-            <button
-              type="button"
-              className="btn h-6 text-[11px]"
-              onClick={() => setOpen(false)}
-            >
+          <IconEditorBody name={name} />
+          <div className="mt-2 flex justify-end">
+            <button type="button" className="btn h-6 text-[11px]" onClick={() => setOpen(false)}>
               Done
             </button>
           </div>

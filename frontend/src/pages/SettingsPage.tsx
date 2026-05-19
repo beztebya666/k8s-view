@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
@@ -9,6 +10,8 @@ import {
   MetricsProvider,
   useApp,
 } from "../stores/app";
+import { useClusterColor } from "../lib/clusterColor";
+import { IconEditorBody } from "../components/IconEditor";
 import { triggerClockProbe, useClockSnapshot } from "../lib/clock";
 import { notify_ } from "../lib/notifications";
 import { copyToClipboard } from "../lib/clipboard";
@@ -129,7 +132,7 @@ export function SettingsPage() {
     <div className="h-full grid grid-cols-[220px_1fr] bg-bg">
       <aside className="border-r border-line bg-bg-soft px-3 py-4 overflow-y-auto">
         <div className="flex items-center gap-2.5 px-1 pb-3 border-b border-line">
-          <ClusterAvatar name={settings.displayName || cluster} />
+          <ClusterAvatar cluster={cluster} />
           <div className="min-w-0">
             <div className="text-sm font-semibold truncate">{settings.displayName || cluster}</div>
             {info?.version && <div className="text-[11px] text-fg-mute truncate">{info.version}</div>}
@@ -214,13 +217,44 @@ function GeneralSettings({
         <div className="flex items-center gap-4">
           <input
             className="input h-9 flex-1"
-            value={settings.displayName || cluster}
+            value={settings.displayName}
+            placeholder={cluster}
             onChange={(e) => patch({ displayName: e.target.value })}
           />
-          <ClusterAvatar name={settings.displayName || cluster} />
-          <button className="btn" title="More">
-            <MoreHorizontal size={16} />
-          </button>
+          <ClusterIconControl cluster={cluster} />
+        </div>
+      </Field>
+      <Field label="Environment tag">
+        <div className="flex items-center gap-3">
+          <input
+            className="input h-9 flex-1"
+            placeholder='e.g. PROD — shown on the picker and every tab'
+            maxLength={12}
+            value={settings.tag}
+            onChange={(e) => patch({ tag: e.target.value })}
+          />
+          <div className="flex items-center gap-1">
+            {([
+              ["bad", "bg-bad/30 border-bad/60"],
+              ["warn", "bg-warn/30 border-warn/60"],
+              ["ok", "bg-ok/30 border-ok/60"],
+              ["info", "bg-info/30 border-info/60"],
+              ["accent", "bg-accent/30 border-accent/60"],
+            ] as const).map(([t, swatch]) => (
+              <button
+                key={t}
+                type="button"
+                title={t}
+                aria-label={`Tag colour ${t}`}
+                onClick={() => patch({ tagTone: t })}
+                className={clsx(
+                  "h-6 w-6 rounded border",
+                  swatch,
+                  settings.tagTone === t ? "ring-2 ring-fg/40" : "opacity-70 hover:opacity-100",
+                )}
+              />
+            ))}
+          </div>
         </div>
       </Field>
       <ReadOnlyBlock label="Kubeconfig" value={info?.kubeconfig ?? ""} />
@@ -769,17 +803,96 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return <h1 className="text-xl font-semibold tracking-tight mb-7">{children}</h1>;
 }
 
-function ClusterAvatar({ name }: { name: string }) {
+// ClusterAvatar — the 48px cluster icon. Renders the uploaded image when
+// set, else an emoji/initials chip on the cluster's *chosen* hue (the old
+// hard-coded green ignored the colour the user picked).
+function ClusterAvatar({ cluster }: { cluster: string }) {
+  const settings = useApp((s) => s.getClusterSettings(cluster));
+  const tint = useClusterColor(cluster);
+  const display = settings.displayName.trim() || cluster;
   const initials = useMemo(() => {
-    const clean = name.trim() || "cluster";
+    const clean = display.trim() || "cluster";
     const parts = clean.split(/[\s._-]+/).filter(Boolean);
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
     return (parts[0][0] + parts[1][0]).toUpperCase();
-  }, [name]);
+  }, [display]);
+
+  if (settings.iconImage) {
+    return <img src={settings.iconImage} alt="" className="h-12 w-12 rounded object-cover shrink-0" />;
+  }
+  const label = settings.iconLabel.trim();
+  return (
+    <div
+      className="h-12 w-12 rounded flex items-center justify-center text-sm font-semibold shrink-0"
+      style={{ background: tint.hsl, color: "rgb(var(--bg))" }}
+    >
+      {label ? label.slice(0, 3) : initials}
+    </div>
+  );
+}
+
+// ClusterIconControl — the avatar plus the "⋮" button, both opening the
+// shared icon editor (image upload, emoji presets, hue).
+function ClusterIconControl({ cluster }: { cluster: string }) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = () => setOpen(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    const r = anchorRef.current?.getBoundingClientRect();
+    if (r) {
+      setPos({
+        left: Math.max(8, Math.min(r.left, window.innerWidth - 296)),
+        top: Math.min(r.bottom + 6, window.innerHeight - 320),
+      });
+    }
+    setOpen(true);
+  };
 
   return (
-    <div className="h-12 w-12 rounded bg-ok text-white flex items-center justify-center text-sm font-semibold shrink-0">
-      {initials}
+    <div ref={anchorRef} className="flex items-center gap-2 shrink-0">
+      <button
+        type="button"
+        className="rounded outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+        title="Customise icon"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={toggle}
+      >
+        <ClusterAvatar cluster={cluster} />
+      </button>
+      <button
+        type="button"
+        className="btn h-9 w-9 justify-center !px-0"
+        title="Customise icon"
+        aria-label="Customise cluster icon"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={toggle}
+      >
+        <MoreHorizontal size={16} />
+      </button>
+      {open && pos && createPortal(
+        <div
+          className="fixed z-[1000] rounded-md border border-line bg-bg-soft shadow-[0_18px_48px_rgb(0_0_0/0.55)] p-3"
+          style={{ left: pos.left, top: pos.top }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <IconEditorBody name={cluster} />
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

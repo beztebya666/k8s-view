@@ -132,6 +132,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Post("/nodes/{name}/uncordon", h.uncordon)
 			r.Post("/nodes/{name}/drain", h.drain)
 			r.Post("/nodes/{name}/shell", h.nodeShell)
+			r.Post("/nodes/{name}/kubeadm", h.nodeKubeadm)
 			r.Delete("/node-shell/{namespace}/{name}", h.nodeShellCleanup)
 			r.Get("/events/{namespace}", h.eventsByNamespace)
 			r.Get("/metrics/pods/{namespace}", h.podMetrics)

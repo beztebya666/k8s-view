@@ -306,6 +306,25 @@ export const api = {
     return jfetch<{ namespace: string; name: string; node: string; image: string }>(
       u.toString().replace(window.location.origin, ""), { method: "POST" });
   },
+  // Dangerous control-plane maintenance. `confirm` MUST equal the node
+  // name — the backend rejects the call otherwise, so the typed-
+  // confirmation modal is load-bearing, not decorative.
+  nodeKubeadm: (
+    cluster: string,
+    name: string,
+    op: "certs-renew" | "upgrade",
+    opts?: { version?: string; image?: string; pullSecret?: string; namespace?: string },
+  ) => {
+    const u = new URL(`/api/v1/${encodeURIComponent(cluster)}/nodes/${encodeURIComponent(name)}/kubeadm`, window.location.origin);
+    u.searchParams.set("op", op);
+    u.searchParams.set("confirm", name);
+    if (opts?.version) u.searchParams.set("version", opts.version);
+    if (opts?.image) u.searchParams.set("image", opts.image);
+    if (opts?.pullSecret) u.searchParams.set("pullSecret", opts.pullSecret);
+    if (opts?.namespace) u.searchParams.set("namespace", opts.namespace);
+    return jfetch<{ namespace: string; name: string; node: string; op: string; container: string }>(
+      u.toString().replace(window.location.origin, ""), { method: "POST" });
+  },
   nodeShellCleanup: (cluster: string, ns: string, name: string) =>
     jfetch<any>(`/api/v1/${encodeURIComponent(cluster)}/node-shell/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`,
       { method: "DELETE" }),

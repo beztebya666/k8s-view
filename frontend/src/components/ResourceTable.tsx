@@ -49,6 +49,7 @@ export function WarningsToggle({
 }
 import { Item, useResourceList } from "../lib/useResourceList";
 import { useApp } from "../stores/app";
+import { useMediaQuery, NARROW_QUERY } from "../lib/ui";
 import { age } from "../lib/format";
 import { clusterNow, useNowTick } from "../lib/clock";
 import { hrefToQuery } from "./DetailPanel";
@@ -72,6 +73,10 @@ export type Column = {
   width: string;            // any valid CSS grid track value (e.g. "1fr", "120px", "minmax(80px,180px)")
   /** optional columns are available from the column menu but hidden initially */
   defaultVisible?: boolean;
+  /** Secondary column auto-hidden on narrow viewports so a small screen
+   *  isn't forced into horizontal scrolling for low-value columns. The
+   *  column menu still lists it; it just doesn't render while narrow. */
+  hideOnNarrow?: boolean;
   /** value used for sorting; defaults to the rendered string */
   sortValue?: (it: Item) => string | number;
   /** how to render the cell. For age-style cells use the exported `<AgeCell>`
@@ -168,13 +173,24 @@ export function ResourceTable(props: ResourceTableProps) {
     () => persistColumnWidths ? readColumnWidths(gvr) : {},
   );
 
+  // Stable signature of the column SET. Pages like NodesPage pass
+  // `columnsFor(gvr)` inline, so `columns` is a fresh array on every
+  // render — and the list re-renders constantly from the live informer.
+  // Depending on the array identity made the reset effect below fire on
+  // every refresh tick, which slammed `openActionKey` back to null and
+  // "un-pressed" the row kebab mid-click. Keying on the joined column
+  // keys instead: the value only changes when the columns genuinely
+  // change (e.g. the Pods metrics toggle) or the resource type switches.
+  const columnsKey = useMemo(() => columns.map((c) => c.key).join("|"), [columns]);
+
   useEffect(() => {
     setVisibleKeys(readVisibleColumns(gvr, columns));
     setColumnWidths(persistColumnWidths ? readColumnWidths(gvr) : {});
     setSelectedKeys(new Set());
     setOpenActionKey(null);
     setColumnMenu(null);
-  }, [gvr, columns, persistColumnWidths]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gvr, columnsKey, persistColumnWidths]);
 
   const setAndStoreVisibleKeys = useCallback((next: Set<string>) => {
     const normalized = normalizeVisibleColumns(columns, next);
@@ -182,9 +198,17 @@ export function ResourceTable(props: ResourceTableProps) {
     writeVisibleColumns(gvr, normalized);
   }, [columns, gvr]);
 
+  // On narrow viewports secondary columns drop out so the essential ones
+  // fit without horizontal scrolling. A column counts as secondary when
+  // it sets `hideOnNarrow`, or its key is in SECONDARY_COLUMN_KEYS — the
+  // keys are semantic and reused across resource types, so one set
+  // covers every table.
+  const narrow = useMediaQuery(NARROW_QUERY);
   const visibleColumns = useMemo(
-    () => columns.filter((c) => visibleKeys.has(c.key)),
-    [columns, visibleKeys],
+    () => columns.filter((c) =>
+      visibleKeys.has(c.key)
+      && !(narrow && (c.hideOnNarrow || SECONDARY_COLUMN_KEYS.has(c.key)))),
+    [columns, visibleKeys, narrow],
   );
 
   // Debounce localSearch: a keystroke shouldn't kick off a 100k-row scan
@@ -276,6 +300,18 @@ export function ResourceTable(props: ResourceTableProps) {
 
   const cols = useMemo(
     () => "36px " + visibleColumns.map((c) => columnWidths[c.key] ? `${columnWidths[c.key]}px` : c.width).join(" ") + " 36px",
+    [visibleColumns, columnWidths],
+  );
+
+  // Sum of every column's *minimum* width (checkbox + actions gutters
+  // included). Applied as min-width on the table wrapper so the grid
+  // fills the viewport when there's room, but never squeezes columns
+  // below their min — instead the whole table (header AND rows) scrolls
+  // horizontally together, so the rightmost columns and the Columns
+  // menu stay reachable on narrow screens / inside the detail panel.
+  const tableMinWidth = useMemo(
+    () => 72 + visibleColumns.reduce(
+      (sum, c) => sum + (columnWidths[c.key] || colMinWidth(c.width)), 0),
     [visibleColumns, columnWidths],
   );
 
@@ -464,6 +500,12 @@ export function ResourceTable(props: ResourceTableProps) {
         )}
       </div>
 
+      {/* Outer = the only horizontal scroller. Header and the vertical
+          rows scroller are both children of the min-width wrapper, so a
+          sideways scroll moves them as one — the header never desyncs
+          from the rows and the Columns menu stays reachable. */}
+      <div className="flex-1 min-h-0 overflow-x-auto overflow-y-hidden flex flex-col">
+      <div className="flex flex-col flex-1 min-h-0" style={{ minWidth: tableMinWidth }}>
       <div
         className="table-grid sticky top-0 z-10 bg-bg-soft border-b border-line"
         style={{ ["--cols" as any]: cols }}
@@ -507,7 +549,7 @@ export function ResourceTable(props: ResourceTableProps) {
         ))}
         <div className="col-head cursor-default flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
           <button
-            className="h-6 w-6 rounded-md flex items-center justify-center text-fg-mute hover:text-fg hover:bg-bg-mute"
+            className="h-6 w-6 rounded-md flex items-center justify-center text-fg-mute hover:text-fg hover:bg-line"
             title="Columns"
             aria-label="Columns"
             onClick={openColumnMenu}
@@ -519,7 +561,7 @@ export function ResourceTable(props: ResourceTableProps) {
 
       <div
         ref={containerRef}
-        className="flex-1 overflow-auto"
+        className="flex-1 overflow-y-auto overflow-x-hidden"
         style={{ contain: "strict" }}
         onScroll={() => {
           setOpenActionKey(null);
@@ -547,6 +589,7 @@ export function ResourceTable(props: ResourceTableProps) {
             return (
               <div
                 key={vrow.key as string}
+                data-detail-trigger
                 className={clsx(
                   "row-hover absolute left-0 right-0 table-grid border-b border-line/60 cursor-pointer",
                   selectedKeys.has(key) && "bg-accent/10 hover:bg-accent/10",
@@ -591,6 +634,8 @@ export function ResourceTable(props: ResourceTableProps) {
             );
           })}
         </div>
+      </div>
+      </div>
       </div>
       {columnMenu && createPortal(
         <ColumnMenu
@@ -757,12 +802,40 @@ function columnStorageKey(gvr: string): string {
 const COLUMN_MIN = 72;
 const COLUMN_MAX = 760;
 
+// Row-action (kebab) menu width. 184 clipped longer labels like
+// "Renew certs (kubeadm)"; 224 fits them with the icon + padding.
+const ACTION_MENU_WIDTH = 224;
+
+// Column keys treated as secondary — dropped automatically on narrow
+// viewports (the user gets the essentials without horizontal scrolling).
+// Keys are semantic and reused across resource types, so this single set
+// covers Pods, workloads, Services, Nodes, ConfigMaps/Secrets, etc. Only
+// keys that are secondary in *every* table they appear in are listed —
+// status / name / ready / restarts / ports / type stay visible.
+const SECONDARY_COLUMN_KEYS = new Set<string>([
+  "controlledBy", "qos", "node", "os", "internal", "selector", "nodeSelector",
+  "images", "strategy", "conditions", "keys", "labels", "immutable",
+  "clusterIP", "externalIP", "uptodate", "available", "updated",
+  "concurrency", "lastSchedule", "lastSuccess",
+]);
+
 function columnWidthStorageKey(gvr: string): string {
   return `k8s-view:column-widths:v1:${gvr}`;
 }
 
 function clampWidth(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+// Resolve a column track ("120px", "minmax(180px, 1.4fr)", "1fr") to the
+// pixel floor it should never shrink below. Pure fr/auto tracks have no
+// intrinsic floor, so we use a sane default that keeps a label legible.
+function colMinWidth(track: string): number {
+  const px = /^\s*(\d+(?:\.\d+)?)px\s*$/.exec(track);
+  if (px) return Math.ceil(Number(px[1]));
+  const mm = /minmax\(\s*(\d+(?:\.\d+)?)px/.exec(track);
+  if (mm) return Math.ceil(Number(mm[1]));
+  return 120;
 }
 
 function maxColumnWidth(): number {
@@ -867,7 +940,7 @@ function RowActions({
       return;
     }
     const rect = e.currentTarget.getBoundingClientRect();
-    const width = 184;
+    const width = ACTION_MENU_WIDTH;
     const itemHeight = 36;
     const height = visibleActions.length * itemHeight + 8;
     const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
@@ -893,7 +966,7 @@ function RowActions({
       {open && menuPos && createPortal(
         <div
           className="fixed z-[1000] rounded-md border border-line bg-bg-soft shadow-[0_18px_48px_rgb(0_0_0/0.55)] py-1"
-          style={{ top: menuPos.top, left: menuPos.left, width: 184 }}
+          style={{ top: menuPos.top, left: menuPos.left, width: ACTION_MENU_WIDTH }}
           onClick={(e) => e.stopPropagation()}
         >
           {visibleActions.map((a) => {

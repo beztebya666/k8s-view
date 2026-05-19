@@ -6,10 +6,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/k8s-view/k8s-view/internal/clusters"
 )
 
 // nodeShell spawns an ephemeral privileged Pod pinned to the requested
@@ -106,12 +109,69 @@ func (h *handlers) nodeShell(w http.ResponseWriter, r *http.Request) {
 		created = pod
 	}
 
+	// Don't return until the `shell` container is actually Running.
+	// Returning the instant the Pod object exists is what made the
+	// frontend's immediate exec fail with `container not found
+	// ("shell")` and "[connection closed]" — the kubelet hadn't pulled
+	// the image / started the container yet. We poll (image pull can
+	// take a while on a cold node) and surface a precise error if the
+	// pull is wedged so the user sees *why* instead of a closed socket.
+	waitCtx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+	if err := waitForContainerRunning(waitCtx, c, ns, name, "shell"); err != nil {
+		h.writeError(w, r, http.StatusBadGateway, err)
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"namespace": created.Namespace,
 		"name":      created.Name,
 		"node":      node,
 		"image":     image,
 	})
+}
+
+// waitForContainerRunning polls the pod until the named container reports
+// State.Running, or until ctx expires. It fails fast (rather than burning
+// the whole timeout) when the kubelet reports a terminal image-pull or
+// crash condition, turning an opaque "connection closed" into an
+// actionable message.
+func waitForContainerRunning(ctx context.Context, c *clusters.Cluster, ns, name, container string) error {
+	tick := time.NewTicker(500 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		pod, err := c.Clientset().CoreV1().Pods(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("timed out waiting for node-shell %s/%s to start", ns, name)
+			}
+			return fmt.Errorf("waiting for node-shell pod: %w", err)
+		}
+		for _, cs := range pod.Status.ContainerStatuses {
+			if cs.Name != container {
+				continue
+			}
+			if cs.State.Running != nil {
+				return nil
+			}
+			if w := cs.State.Waiting; w != nil {
+				switch w.Reason {
+				case "ErrImagePull", "ImagePullBackOff", "InvalidImageName",
+					"CreateContainerConfigError", "CrashLoopBackOff", "RunContainerError":
+					msg := w.Message
+					if msg == "" {
+						msg = w.Reason
+					}
+					return fmt.Errorf("node-shell container failed to start (%s): %s", w.Reason, msg)
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for node-shell %s/%s to start (still pulling image?)", ns, name)
+		case <-tick.C:
+		}
+	}
 }
 
 // nodeShellCleanup deletes the ephemeral pod the matching session

@@ -9,11 +9,12 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Network, Wifi, WifiOff } from "lucide-react";
 import clsx from "clsx";
 import { api } from "../lib/api";
-import { useApp } from "../stores/app";
+import { useApp, useClusterLabel } from "../stores/app";
 import { activeCount, subscribe as subscribePF, getSnapshot as pfSnapshot } from "../lib/portForwards";
 
 export function StatusBar() {
   const cluster = useApp((s) => s.cluster);
+  const clusterLabel = useClusterLabel(cluster);
   const navigate = useNavigate();
 
   const { data: clusters } = useQuery({
@@ -51,7 +52,7 @@ export function StatusBar() {
         title={connected ? "Cluster API reachable" : here ? "Cluster API unreachable" : "No cluster selected"}
       >
         {connected ? <Wifi size={11} /> : <WifiOff size={11} />}
-        <span className="font-medium text-fg">{cluster || "—"}</span>
+        <span className="font-medium text-fg">{clusterLabel || "—"}</span>
       </span>
       {version && <span title="Server Kubernetes version">k8s {version}</span>}
 

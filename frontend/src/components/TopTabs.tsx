@@ -24,10 +24,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { useApp } from "../stores/app";
+import { useApp, useClusterLabel } from "../stores/app";
 import { useTabs, type PageTab } from "../stores/tabs";
 import { SECTIONS } from "../nav/sections";
 import { clusterColor, useClusterColor } from "../lib/clusterColor";
+import { ClusterTag } from "./ClusterTag";
 
 const ROUTE_META: Record<string, { label: string; icon: LucideIcon }> = (() => {
   const m: Record<string, { label: string; icon: LucideIcon }> = {
@@ -311,6 +312,7 @@ function TabPill({
   const desc = describe(tab);
   const Icon = desc.icon;
   const tint = useClusterColor(tab.cluster);
+  const clusterLabel = useClusterLabel(tab.cluster);
   const commitTab = useTabs((s) => s.commitTab);
   return (
     <div
@@ -330,7 +332,7 @@ function TabPill({
       onAuxClick={(e) => onMiddleClick(e, tab)}
       onContextMenu={(e) => onContextMenu(e, tab, idx)}
       title={
-        `${desc.label} · ${tab.cluster}${desc.detail ? ` · ${desc.detail}` : ""}`
+        `${desc.label} · ${clusterLabel}${desc.detail ? ` · ${desc.detail}` : ""}`
         + (tab.preview ? " · preview tab (double-click to keep)" : "")
       }
     >
@@ -350,9 +352,10 @@ function TabPill({
       <span className="min-w-0 flex flex-col leading-tight overflow-hidden">
         <span className={clsx("truncate", tab.preview && "italic")}>{desc.label}</span>
         <span className={clsx("truncate text-[10px] text-fg-mute", tab.preview && "italic")}>
-          {tab.cluster}{desc.detail ? ` · ${desc.detail}` : ""}
+          {clusterLabel}{desc.detail ? ` · ${desc.detail}` : ""}
         </span>
       </span>
+      <ClusterTag cluster={tab.cluster} size="xs" className="shrink-0" />
       <button
         type="button"
         className={clsx(

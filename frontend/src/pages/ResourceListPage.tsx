@@ -16,6 +16,9 @@ import { usePodMetricsStore } from "../lib/podMetricsStore";
 import { useEventIndex, eventsForItem, EventIndexContext } from "../lib/eventsIndex";
 import { podDisplayStatus, type PodStatusKind } from "../lib/podStatus";
 import { notify_ } from "../lib/notifications";
+import { WorkloadTabsBar, workloadRouteForGvr } from "../components/WorkloadTabsBar";
+
+const CRD_GVR = "apiextensions.k8s.io/v1/CustomResourceDefinition";
 
 export function ResourceListPage({ title, gvr, namespaced }: { title: string; gvr: string; namespaced: boolean }) {
   const cluster = useApp((s) => s.cluster);
@@ -40,11 +43,26 @@ export function ResourceListPage({ title, gvr, namespaced }: { title: string; gv
   // computed status kind is in the active set. Lens uses a sidebar
   // dropdown for the same purpose, but inline chips fit our header better.
   const [podStatusFilter, setPodStatusFilter] = useState<Set<PodStatusKind> | null>(null);
-  const podFilter = useCallback((it: Item) => {
-    if (!podStatusFilter) return true;
-    if (gvr !== "/v1/Pod") return true;
-    return podStatusFilter.has(podDisplayStatus(it).kind);
-  }, [gvr, podStatusFilter]);
+  // Secret quick-filter, same idea as the Pod status strip but bucketed
+  // by `.type` (TLS / Opaque / Helm / Docker / SA token / Other).
+  const [secretTypeFilter, setSecretTypeFilter] = useState<Set<SecretBucket> | null>(null);
+  // The Definitions (CRD) list is scoped by the Topbar's Group picker
+  // instead of a namespace — CRDs are cluster-scoped and what you want to
+  // narrow by is the API group.
+  const apiGroup = useApp((s) => s.apiGroup);
+  const listFilter = useCallback((it: Item) => {
+    if (gvr === "/v1/Pod") {
+      return !podStatusFilter || podStatusFilter.has(podDisplayStatus(it).kind);
+    }
+    if (gvr === "/v1/Secret") {
+      return !secretTypeFilter || secretTypeFilter.has(secretBucket(it));
+    }
+    if (gvr === CRD_GVR) {
+      return !apiGroup || ((it as any).spec?.group || "core") === apiGroup;
+    }
+    return true;
+  }, [gvr, podStatusFilter, secretTypeFilter, apiGroup]);
+  const hasQuickFilter = gvr === "/v1/Pod" || gvr === "/v1/Secret" || gvr === CRD_GVR;
   // Subscribe to /v1/Event only on rows whose warning badge can actually
   // benefit from kubelet/controller-manager Warning events — that's pods
   // and the workloads that own them. ConfigMaps, Secrets, etc. don't get
@@ -107,9 +125,12 @@ export function ResourceListPage({ title, gvr, namespaced }: { title: string; gv
   );
   const rowHref = useCallback((it: Item) => detailHref(it, gvr), [gvr]);
 
+  const workloadRoute = workloadRouteForGvr(gvr);
+
   return (
     <div className="h-full flex flex-col relative">
       {gvr === "/v1/Pod" && showPodMetrics && <PodMetricsBridge />}
+      {workloadRoute && <WorkloadTabsBar cluster={cluster} activeRoute={workloadRoute} />}
       <header className="px-4 py-3 border-b border-line flex items-center gap-3">
         <h1 className="text-lg font-medium tracking-tight shrink-0">{title}</h1>
         <span className="chip">{gvr.replace(/^\//, "core/")}</span>
@@ -145,6 +166,13 @@ export function ResourceListPage({ title, gvr, namespaced }: { title: string; gv
           onChange={setPodStatusFilter}
         />
       )}
+      {gvr === "/v1/Secret" && (
+        <SecretTypeFilterStrip
+          cluster={cluster}
+          active={secretTypeFilter}
+          onChange={setSecretTypeFilter}
+        />
+      )}
       <div className="flex-1 min-h-0">
         <EventIndexContext.Provider value={eventsCtx}>
           <ResourceTable
@@ -159,7 +187,7 @@ export function ResourceListPage({ title, gvr, namespaced }: { title: string; gv
             issueAccessor={issueAccessor}
             issuesFirst={issuesFirst}
             onIssueCountChange={setIssueCount}
-            filter={gvr === "/v1/Pod" ? podFilter : undefined}
+            filter={hasQuickFilter ? listFilter : undefined}
           />
         </EventIndexContext.Provider>
       </div>
@@ -763,6 +791,105 @@ function PodStatusFilterStrip({
             )}
             onClick={() => toggle(b.kind)}
             title={`${b.label}: ${counts[b.kind].toLocaleString()} pod${counts[b.kind] === 1 ? "" : "s"}`}
+          >
+            {b.label}
+            <span className="ml-1 text-fg-mute">{counts[b.kind].toLocaleString()}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+type SecretBucket = "tls" | "opaque" | "helm" | "docker" | "sa" | "other";
+
+// Classify a Secret by its `.type` into the buckets operators actually
+// reach for ("show me the TLS certs", "where are the Helm releases").
+function secretBucket(it: Item): SecretBucket {
+  const t = (it as any).type as string | undefined;
+  switch (t) {
+    case "kubernetes.io/tls":
+      return "tls";
+    case "kubernetes.io/dockerconfigjson":
+    case "kubernetes.io/dockercfg":
+      return "docker";
+    case "kubernetes.io/service-account-token":
+      return "sa";
+    case undefined:
+    case "":
+    case "Opaque":
+      return "opaque";
+    default:
+      // Helm stores releases as helm.sh/release.v1 (sh.helm.release.v1
+      // on very old charts) — fold both in.
+      if (t.startsWith("helm.sh/") || t.startsWith("sh.helm.")) return "helm";
+      return "other";
+  }
+}
+
+// SecretTypeFilterStrip — the Secrets analogue of PodStatusFilterStrip.
+// Counts come from the same in-memory pool the table reads, so they never
+// drift from what's on screen.
+function SecretTypeFilterStrip({
+  cluster, active, onChange,
+}: {
+  cluster: string;
+  active: Set<SecretBucket> | null;
+  onChange: (next: Set<SecretBucket> | null) => void;
+}) {
+  const namespace = useApp((s) => s.namespace);
+  const namespaces = useApp((s) => s.namespaces);
+  const ns = namespaces.length > 0 ? namespaces : (namespace ? [namespace] : undefined);
+  const { items } = useResourceList(cluster, "/v1/Secret", ns);
+  const counts = useMemo(() => {
+    const out: Record<SecretBucket, number> = { tls: 0, opaque: 0, helm: 0, docker: 0, sa: 0, other: 0 };
+    for (const it of items) out[secretBucket(it)]++;
+    return out;
+  }, [items]);
+  const buckets: { kind: SecretBucket; label: string; tone: string }[] = [
+    { kind: "tls",    label: "TLS",      tone: "border-ok/40 bg-ok/10 text-ok" },
+    { kind: "opaque", label: "Opaque",   tone: "border-info/40 bg-info/10 text-info" },
+    { kind: "helm",   label: "Helm",     tone: "border-accent/40 bg-accent/10 text-accent" },
+    { kind: "docker", label: "Docker",   tone: "border-warn/40 bg-warn/10 text-warn" },
+    { kind: "sa",     label: "SA token", tone: "border-line bg-bg-mute text-fg-soft" },
+    { kind: "other",  label: "Other",    tone: "border-line bg-bg-mute text-fg-mute" },
+  ];
+  const toggle = (k: SecretBucket) => {
+    const next = new Set(active ?? []);
+    if (next.has(k)) {
+      next.delete(k);
+      if (next.size === 0) { onChange(null); return; }
+    } else {
+      next.add(k);
+    }
+    onChange(next);
+  };
+  const allOff = active === null;
+  return (
+    <div className="px-4 py-2 border-b border-line/60 flex items-center gap-1.5 text-xs flex-wrap">
+      <button
+        type="button"
+        className={clsx("h-7 px-2 rounded-md border text-[11px] tracking-wide",
+          allOff ? "border-accent/40 bg-accent/10 text-accent" : "border-line text-fg-soft hover:text-fg hover:bg-bg-mute")}
+        onClick={() => onChange(null)}
+      >
+        All <span className="ml-1 text-fg-mute">{items.length.toLocaleString()}</span>
+      </button>
+      <span className="mx-1 h-4 w-px bg-line" aria-hidden />
+      {buckets.map((b) => {
+        const checked = active?.has(b.kind) ?? false;
+        const dim = !allOff && !checked;
+        return (
+          <button
+            key={b.kind}
+            type="button"
+            className={clsx(
+              "h-7 px-2 rounded-md border text-[11px] tracking-wide transition-opacity",
+              b.tone,
+              dim && "opacity-50",
+            )}
+            onClick={() => toggle(b.kind)}
+            title={`${b.label}: ${counts[b.kind].toLocaleString()} secret${counts[b.kind] === 1 ? "" : "s"}`}
           >
             {b.label}
             <span className="ml-1 text-fg-mute">{counts[b.kind].toLocaleString()}</span>

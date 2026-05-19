@@ -91,6 +91,13 @@ export function PodLogsPage(props: {
   // explicit preference instead of resetting every time.
   const [showTimestamps, setShowTimestamps] = usePersistedState<boolean>("k8s-view:logs:show-timestamps", false);
   const [showResourceName, setShowResourceName] = usePersistedState<boolean>("k8s-view:logs:show-resource-name", false);
+  // Wrap long lines instead of clipping; pretty-print JSON bodies. Both
+  // turn rows into variable-height content, so the virtualiser switches
+  // from the fixed-18px fast path to measured heights only when one of
+  // these is on — the default stays on the cheap path for 150k-line tails.
+  const [wrap, setWrap] = usePersistedState<boolean>("k8s-view:logs:wrap", false);
+  const [prettyJson, setPrettyJson] = usePersistedState<boolean>("k8s-view:logs:pretty-json", false);
+  const [logfmt, setLogfmt] = usePersistedState<boolean>("k8s-view:logs:logfmt", false);
   const [previous, setPrevious] = useState(false);
   const [activeMatch, setActiveMatch] = useState(0);
   const [follow] = useState(true);
@@ -326,13 +333,26 @@ export function PodLogsPage(props: {
     setActiveMatch(0);
   }, [search.query, search.caseSensitive, search.regex, search.filter]);
 
+  // Variable-height mode: wrapped lines and pretty-printed JSON span
+  // multiple rows, so we let the virtualiser measure each rendered row
+  // instead of assuming a flat 18px. Kept off the hot path otherwise.
+  const dynamicRows = wrap || prettyJson;
   const containerRef = useRef<HTMLDivElement | null>(null);
   const v = useVirtualizer({
     count: filtered.length,
     getScrollElement: () => containerRef.current,
     estimateSize: () => 18,
     overscan: 30,
+    measureElement: dynamicRows
+      ? (el) => el.getBoundingClientRect().height
+      : undefined,
   });
+
+  // Re-measure when the layout mode flips so stale fixed/measured sizes
+  // don't leave gaps or overlaps after toggling Wrap / Pretty JSON.
+  useEffect(() => {
+    v.measure();
+  }, [dynamicRows, v]);
 
   const onSearchPrev = useCallback(() => {
     if (totalMatches === 0) return;
@@ -505,7 +525,7 @@ export function PodLogsPage(props: {
 
   return (
     <div className="h-full flex flex-col bg-bg">
-      <header className="h-10 px-3 border-b border-line flex items-center gap-2 bg-bg-soft text-xs">
+      <header className="min-h-10 px-3 py-1.5 border-b border-line flex flex-wrap items-center gap-2 bg-bg-soft text-xs">
         <ContainerPicker
           options={containerOptions}
           selected={selectedContainers}
@@ -661,13 +681,23 @@ export function PodLogsPage(props: {
             if (!chunk) return null;
             return (
               <div key={vi.key as string}
-                className="absolute left-0 right-0 whitespace-pre"
-                style={{ transform: `translateY(${vi.start}px)`, height: vi.size }}>
+                data-index={vi.index}
+                ref={dynamicRows ? v.measureElement : undefined}
+                className={clsx(
+                  "absolute left-0 right-0",
+                  wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre",
+                )}
+                style={{
+                  transform: `translateY(${vi.start}px)`,
+                  ...(dynamicRows ? null : { height: vi.size }),
+                }}>
                 <LogRow
                   chunk={chunk}
                   showTimestamp={showTimestamps}
                   showSource={showSource}
                   activeMatchIndex={activeMatch}
+                  prettyJson={prettyJson}
+                  logfmt={logfmt}
                 />
               </div>
             );
@@ -700,6 +730,24 @@ export function PodLogsPage(props: {
           disabled={!hasPreviousTerminated}
           label="Previous container"
           title={!hasPreviousTerminated ? "No previous terminated instance for selected containers" : undefined}
+        />
+        <Toggle
+          checked={wrap}
+          onChange={setWrap}
+          label="Wrap"
+          title="Wrap long lines instead of clipping them"
+        />
+        <Toggle
+          checked={prettyJson}
+          onChange={setPrettyJson}
+          label="Pretty JSON"
+          title="Pretty-print lines whose body is a JSON object/array. Non-JSON lines are left exactly as-is."
+        />
+        <Toggle
+          checked={logfmt}
+          onChange={setLogfmt}
+          label="logfmt"
+          title="Tokenise and colour logfmt (key=value) lines. Lines that aren't logfmt are left exactly as-is."
         />
 
         <DownloadMenu
