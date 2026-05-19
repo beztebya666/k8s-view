@@ -236,22 +236,38 @@ export const api = {
   getResource: (cluster: string, gvr: GVR, ns: string | null, name: string) =>
     jfetch<any>(resourceURL(cluster, gvr, ns, name)),
 
-  applyResource: (cluster: string, gvr: GVR, ns: string | null, name: string, yamlOrJSON: string) =>
-    jfetch<any>(resourceURL(cluster, gvr, ns, name), {
+  // Save / patch a resource. Defaults to server-side apply (merge with the
+  // live object) — that's what partial-field callers (e.g. CronJob suspend
+  // toggle) need. Pass `strategy: "update"` for full-document YAML edits:
+  // it switches the backend to a PUT/Update, which matches `kubectl edit`
+  // and Lens — necessary because SSA's structured-merge-diff conversion
+  // rejects shapes (e.g. duplicate containerPort+protocol entries) that
+  // the apiserver accepts on a plain Update.
+  applyResource: (cluster: string, gvr: GVR, ns: string | null, name: string,
+                  yamlOrJSON: string, opts?: { strategy?: "apply" | "update" }) => {
+    const u = new URL(resourceURL(cluster, gvr, ns, name), window.location.origin);
+    if (opts?.strategy === "update") u.searchParams.set("strategy", "update");
+    return jfetch<any>(u.toString().replace(window.location.origin, ""), {
       method: "PUT",
       body: yamlOrJSON,
       headers: { "Content-Type": "application/yaml" },
-    }),
+    });
+  },
 
-  // Dry-run preview: server validates and computes the would-be post-merge
-  // object without persisting. Used to render a "what will change" diff
-  // before the user actually saves.
-  applyResourceDryRun: (cluster: string, gvr: GVR, ns: string | null, name: string, yamlOrJSON: string) =>
-    jfetch<any>(resourceURL(cluster, gvr, ns, name) + "?dryRun=All", {
+  // Dry-run preview: server validates and computes the would-be result
+  // without persisting it. Used to render a "what will change" diff before
+  // the user actually saves. Strategy mirrors `applyResource`.
+  applyResourceDryRun: (cluster: string, gvr: GVR, ns: string | null, name: string,
+                        yamlOrJSON: string, opts?: { strategy?: "apply" | "update" }) => {
+    const u = new URL(resourceURL(cluster, gvr, ns, name), window.location.origin);
+    u.searchParams.set("dryRun", "All");
+    if (opts?.strategy === "update") u.searchParams.set("strategy", "update");
+    return jfetch<any>(u.toString().replace(window.location.origin, ""), {
       method: "PUT",
       body: yamlOrJSON,
       headers: { "Content-Type": "application/yaml" },
-    }),
+    });
+  },
 
   deleteResource: (cluster: string, gvr: GVR, ns: string | null, name: string,
                    opts?: { propagation?: "Foreground" | "Background" | "Orphan"; force?: boolean }) => {

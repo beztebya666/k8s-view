@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as YAML from "yaml";
-import { Eye, RefreshCcw } from "lucide-react";
+import { Eye, RefreshCcw, X } from "lucide-react";
 import { api, type GVR } from "../lib/api";
 import { YAMLDiffEditor, YAMLEditor } from "./YAMLEditor";
 
@@ -45,6 +45,14 @@ export function YAMLEditPane({
   // edit view temporarily — Apply / Cancel from inside the preview.
   const [previewText, setPreviewText] = useState<string | null>(null);
 
+  // Auto-dismiss the save error after a short delay so the banner doesn't
+  // sit there forever; the × button also closes it on demand.
+  useEffect(() => {
+    if (!err) return;
+    const t = window.setTimeout(() => setErr(null), 5_000);
+    return () => window.clearTimeout(t);
+  }, [err]);
+
   // Reset the buffer whenever the server's resourceVersion advances — keeps
   // the editor aligned with reality after a successful apply or an external
   // change. We compare on uid + resourceVersion so editing isn't clobbered
@@ -62,7 +70,10 @@ export function YAMLEditPane({
     setBusy(true);
     setErr(null);
     try {
-      await api.applyResource(cluster, ref, ns, name, text);
+      // strategy=update → full PUT/Replace, not server-side apply: SSA's
+      // SMD validator rejects legal-but-quirky shapes (duplicate
+      // containerPort+protocol, …) that the apiserver accepts on Update.
+      await api.applyResource(cluster, ref, ns, name, text, { strategy: "update" });
       setSavedAt(Date.now());
       await refetch();
     } catch (e: any) {
@@ -82,7 +93,7 @@ export function YAMLEditPane({
     setBusy(true);
     setErr(null);
     try {
-      const result = await api.applyResourceDryRun(cluster, ref, ns, name, text);
+      const result = await api.applyResourceDryRun(cluster, ref, ns, name, text, { strategy: "update" });
       setPreviewText(YAML.stringify(stripManaged(result)));
     } catch (e: any) {
       setErr(e?.message ?? String(e));
@@ -96,7 +107,7 @@ export function YAMLEditPane({
   return (
     <div className="h-full flex flex-col bg-bg">
       <header className="h-9 shrink-0 px-3 border-b border-line flex items-center gap-3 bg-bg-soft text-xs">
-        <span className="text-fg-mute">Editing as YAML — Save will server-side apply.</span>
+        <span className="text-fg-mute">Editing as YAML — Save replaces this resource (kubectl-edit semantics).</span>
         <span className="text-fg-soft truncate">{target}</span>
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -131,8 +142,17 @@ export function YAMLEditPane({
       </header>
 
       {err && (
-        <div className="px-3 py-1.5 text-xs text-bad border-b border-bad/30 bg-bad/10 truncate" title={err}>
-          {err}
+        <div className="px-3 py-1.5 text-xs text-bad border-b border-bad/30 bg-bad/10 flex items-start gap-2">
+          <span className="flex-1 whitespace-pre-wrap break-words max-h-[120px] overflow-y-auto">{err}</span>
+          <button
+            type="button"
+            className="shrink-0 text-bad/70 hover:text-bad inline-flex items-center justify-center h-4 w-4 -mr-1"
+            title="Dismiss"
+            aria-label="Dismiss"
+            onClick={() => setErr(null)}
+          >
+            <X size={12} />
+          </button>
         </div>
       )}
 

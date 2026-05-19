@@ -14,7 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
 	"github.com/k8s-view/k8s-view/internal/auth"
@@ -429,6 +429,24 @@ func (h *handlers) getResource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, obj)
 }
 
+// applyResource saves a resource. Two strategies:
+//
+//   default ("apply") — server-side apply. The body may be a partial
+//   patch (just the fields to change); the apiserver merges it with the
+//   live object. Used by every small "toggle one field" caller in the UI
+//   (e.g. CronJob suspend) where preserving every other field is the
+//   whole point.
+//
+//   "update" — full PUT. The body must be the entire object; it replaces
+//   the live one. Used by the YAML editor where the user is saving a
+//   complete edited document. We have to provide this because SSA's
+//   structured-merge-diff conversion rejects shapes the apiserver itself
+//   accepts on Update (the classic case: two containerPorts sharing the
+//   same containerPort+protocol — Lens / `kubectl edit` save it fine).
+//
+// The strategy is selected via ?strategy=update; everything else
+// continues to use server-side apply, so existing partial-patch callers
+// keep working unchanged.
 func (h *handlers) applyResource(w http.ResponseWriter, r *http.Request) {
 	c, err := h.cluster(r)
 	if err != nil {
@@ -451,20 +469,51 @@ func (h *handlers) applyResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// dryRun=All asks the apiserver to validate + return the *would-be*
-	// post-merge object without persisting it. The frontend uses this to
-	// render a server-side diff preview before the user actually saves.
-	patchOpts := metav1.PatchOptions{FieldManager: "k8s-view", Force: ptrBool(true)}
-	if r.URL.Query().Get("dryRun") == "All" {
-		patchOpts.DryRun = []string{metav1.DryRunAll}
+	isDryRun := r.URL.Query().Get("dryRun") == "All"
+	ri := c.Dynamic().Resource(gvr)
+
+	if r.URL.Query().Get("strategy") == "update" {
+		obj := &unstructured.Unstructured{}
+		if err := obj.UnmarshalJSON(jsonBody); err != nil {
+			h.writeError(w, r, http.StatusBadRequest, fmt.Errorf("decode YAML/JSON: %w", err))
+			return
+		}
+		// Force identity from the URL path: a stray name/namespace in
+		// the body must not redirect the save to a different object.
+		obj.SetName(name)
+		if ns != "" {
+			obj.SetNamespace(ns)
+		}
+		opts := metav1.UpdateOptions{FieldManager: "k8s-view"}
+		if isDryRun {
+			opts.DryRun = []string{metav1.DryRunAll}
+		}
+		var result *unstructured.Unstructured
+		if ns != "" {
+			result, err = ri.Namespace(ns).Update(r.Context(), obj, opts)
+		} else {
+			result, err = ri.Update(r.Context(), obj, opts)
+		}
+		if err != nil {
+			h.writeError(w, r, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
 	}
 
-	ri := c.Dynamic().Resource(gvr)
+	// Default: server-side apply. dryRun=All asks the apiserver to
+	// validate and return the *would-be* post-merge object without
+	// persisting it — the frontend uses this for the diff preview.
+	patchOpts := metav1.PatchOptions{FieldManager: "k8s-view", Force: ptrBool(true)}
+	if isDryRun {
+		patchOpts.DryRun = []string{metav1.DryRunAll}
+	}
 	var obj *unstructured.Unstructured
 	if ns != "" {
-		obj, err = ri.Namespace(ns).Patch(r.Context(), name, types.ApplyPatchType, jsonBody, patchOpts)
+		obj, err = ri.Namespace(ns).Patch(r.Context(), name, k8stypes.ApplyPatchType, jsonBody, patchOpts)
 	} else {
-		obj, err = ri.Patch(r.Context(), name, types.ApplyPatchType, jsonBody, patchOpts)
+		obj, err = ri.Patch(r.Context(), name, k8stypes.ApplyPatchType, jsonBody, patchOpts)
 	}
 	if err != nil {
 		h.writeError(w, r, http.StatusBadGateway, err)
@@ -541,10 +590,10 @@ func (h *handlers) serverSideApply(w http.ResponseWriter, r *http.Request) {
 		if ns == "" {
 			ns = "default"
 		}
-		out, err = ri.Namespace(ns).Patch(r.Context(), obj.GetName(), types.ApplyPatchType,
+		out, err = ri.Namespace(ns).Patch(r.Context(), obj.GetName(), k8stypes.ApplyPatchType,
 			jsonBody, metav1.PatchOptions{FieldManager: "k8s-view", Force: ptrBool(true)})
 	} else {
-		out, err = ri.Patch(r.Context(), obj.GetName(), types.ApplyPatchType,
+		out, err = ri.Patch(r.Context(), obj.GetName(), k8stypes.ApplyPatchType,
 			jsonBody, metav1.PatchOptions{FieldManager: "k8s-view", Force: ptrBool(true)})
 	}
 	if err != nil {
@@ -571,7 +620,7 @@ func (h *handlers) scale(w http.ResponseWriter, r *http.Request) {
 	}
 	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
 	obj, err := c.Dynamic().Resource(gvr).Namespace(ns).Patch(
-		r.Context(), name, types.MergePatchType, patch, metav1.PatchOptions{})
+		r.Context(), name, k8stypes.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		h.writeError(w, r, http.StatusBadGateway, err)
 		return
@@ -592,7 +641,7 @@ func (h *handlers) restart(w http.ResponseWriter, r *http.Request) {
 		`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":"%s"}}}}}`,
 		metav1.Now().UTC().Format("2006-01-02T15:04:05Z"))
 	obj, err := c.Dynamic().Resource(gvr).Namespace(ns).Patch(
-		r.Context(), name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+		r.Context(), name, k8stypes.StrategicMergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		h.writeError(w, r, http.StatusBadGateway, err)
 		return
@@ -617,7 +666,7 @@ func (h *handlers) toggleCordon(w http.ResponseWriter, r *http.Request, value bo
 	name := urlParam(r, "name")
 	patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, value))
 	_, err = c.Clientset().CoreV1().Nodes().Patch(
-		r.Context(), name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+		r.Context(), name, k8stypes.StrategicMergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		h.writeError(w, r, http.StatusBadGateway, err)
 		return
@@ -635,7 +684,7 @@ func (h *handlers) drain(w http.ResponseWriter, r *http.Request) {
 	// Step 1: cordon
 	patch := []byte(`{"spec":{"unschedulable":true}}`)
 	if _, err := c.Clientset().CoreV1().Nodes().Patch(
-		r.Context(), name, types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		r.Context(), name, k8stypes.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		h.writeError(w, r, http.StatusBadGateway, err)
 		return
 	}

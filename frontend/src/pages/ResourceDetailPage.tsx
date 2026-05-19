@@ -2182,11 +2182,23 @@ function YAMLTab({
   // Reset when the object identity changes.
   useEffect(() => { setText(original); setShowDiff(false); }, [original]);
 
+  // Auto-dismiss save errors so the red banner doesn't sit there forever.
+  // The × button on the banner also clears it on demand.
+  useEffect(() => {
+    if (!err) return;
+    const t = window.setTimeout(() => setErr(null), 5_000);
+    return () => window.clearTimeout(t);
+  }, [err]);
+
   const dirty = text !== original;
   const onApply = async () => {
     setBusy(true); setErr(null);
     try {
-      await api.applyResource(cluster, gvr, namespace, name, text);
+      // strategy=update → full PUT/Replace, matches `kubectl edit` and
+      // Lens. Server-side apply is rejected by the apiserver for shapes
+      // the apiserver itself accepts on Update (e.g. duplicate
+      // containerPort+protocol), so a YAML editor must use Update.
+      await api.applyResource(cluster, gvr, namespace, name, text, { strategy: "update" });
       setShowDiff(false);
       onSaved();
     } catch (e: any) { setErr(e.message); }
@@ -2196,7 +2208,7 @@ function YAMLTab({
   return (
     <div className="h-full flex flex-col">
       <div className="px-4 py-2 border-b border-line flex items-center gap-2 text-xs text-fg-mute">
-        <span>{showDiff ? "Reviewing diff before apply" : "Editing as YAML — Save will server-side apply."}</span>
+        <span>{showDiff ? "Reviewing diff before apply" : "Editing as YAML — Save replaces this resource (kubectl-edit semantics)."}</span>
         <div className="ml-auto flex items-center gap-2">
           {showDiff ? (
             <>
@@ -2228,7 +2240,20 @@ function YAMLTab({
           )}
         </div>
       </div>
-      {err && <div className="px-4 py-2 text-bad text-sm border-b border-line">{err}</div>}
+      {err && (
+        <div className="px-4 py-2 text-bad text-sm border-b border-bad/30 bg-bad/10 flex items-start gap-2">
+          <span className="flex-1 whitespace-pre-wrap break-words max-h-[140px] overflow-y-auto">{err}</span>
+          <button
+            type="button"
+            className="shrink-0 text-bad/70 hover:text-bad inline-flex items-center justify-center h-5 w-5 -mr-1"
+            title="Dismiss"
+            aria-label="Dismiss"
+            onClick={() => setErr(null)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
       <div className="flex-1">
         {showDiff ? (
           <YAMLDiffEditor original={original} modified={text} height="100%" />

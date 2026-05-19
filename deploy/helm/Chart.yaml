@@ -53,3 +53,5 @@ annotations:
       description: Multi-arch CI/CD — rolling :beta from main, tag/dispatch releases with amd64+arm64 images and Linux/macOS/Windows binaries
     - kind: fixed
       description: WebSocket close-duration was logged as ~0 (time.Since evaluated at connect, not close)
+    - kind: fixed
+      description: YAML editor — Save no longer fails with SSA "duplicate entries for key" errors (full-document saves now use Update/PUT like kubectl-edit and Lens; partial-field patches keep using server-side apply). The error banner is dismissible (× button) and auto-clears after 5 s.
