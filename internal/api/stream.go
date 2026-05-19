@@ -94,7 +94,9 @@ func (h *handlers) stream(w http.ResponseWriter, r *http.Request) {
 	)
 	start := time.Now()
 	logger.Info("websocket connected")
-	defer logger.Info("websocket closed", zap.Duration("duration", time.Since(start)))
+	defer func() {
+		logger.Info("websocket closed", zap.Duration("duration", time.Since(start)))
+	}()
 
 	mux := newStreamMux(c, conn, useJSON, logger)
 	mux.run(r.Context())
@@ -305,8 +307,15 @@ func (m *streamMux) pinger() {
 		case <-m.stop:
 			return
 		case <-t.C:
-			_ = m.conn.SetWriteDeadline(time.Now().Add(15 * time.Second))
-			if err := m.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			// WriteControl is the ONLY conn write method gorilla permits
+			// from a goroutine other than the one driving the data
+			// writer — it locks internally and carries its own deadline.
+			// The previous SetWriteDeadline + WriteMessage(PingMessage)
+			// took the unsynchronised data-write path and raced
+			// writer()'s frame flush → "panic: concurrent write to
+			// websocket connection". WriteControl removes the race
+			// entirely without a shared mutex.
+			if err := m.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(15*time.Second)); err != nil {
 				m.logger.Warn("websocket ping failed", zap.Error(err))
 				m.shutdown()
 				return

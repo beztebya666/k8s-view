@@ -123,7 +123,9 @@ function Diagram({ layout }: { layout: Layout }) {
   };
 
   const { left, middle, right, height } = layout;
-  const cols = (left.length > 0 ? 1 : 0) + (middle.length > 0 ? 1 : 0) + (right.length > 0 ? 1 : 0);
+  // Only populated columns get a slot — see the layout note below.
+  const present = [left, middle, right].filter((c) => c.length > 0);
+  const cols = present.length;
 
   // Measure the wrapper to size COL_W against the actual available width.
   // ResizeObserver fires on detail-pane resize so the topology re-flows to
@@ -156,11 +158,12 @@ function Diagram({ layout }: { layout: Layout }) {
 
   const width = SIDE_PAD * 2 + cols * colW + Math.max(0, cols - 1) * COL_GAP;
   const colX = (i: number) => SIDE_PAD + i * (colW + COL_GAP);
-  const columns: { nodes: Node[]; x: number }[] = [
-    { nodes: left,   x: colX(0) },
-    { nodes: middle, x: colX(1) },
-    { nodes: right,  x: colX(2) },
-  ];
+  // Pack only the non-empty columns left-to-right. Placing middle/right
+  // at fixed indices 1/2 pushed them past the SVG width whenever `left`
+  // was empty (StatefulSet, DaemonSet, Job, Service, Node) — the pod
+  // column was rendered off-canvas and clipped.
+  const columns: { nodes: Node[]; x: number }[] =
+    present.map((nodes, i) => ({ nodes, x: colX(i) }));
 
   return (
     <div className="rounded-md border border-line bg-bg-soft overflow-hidden">
@@ -173,9 +176,12 @@ function Diagram({ layout }: { layout: Layout }) {
             </marker>
           </defs>
 
-          {/* Edges left→middle and middle→right */}
-          {left.length > 0 && middle.length > 0 && drawEdges(colX(0) + colW, left, colX(1), middle)}
-          {middle.length > 0 && right.length > 0 && drawEdges(colX(1) + colW, middle, colX(2), right)}
+          {/* Edges between each adjacent pair of populated columns. */}
+          {columns.slice(0, -1).map((col, i) => (
+            <g key={`edge-${i}`}>
+              {drawEdges(col.x + colW, col.nodes, columns[i + 1].x, columns[i + 1].nodes)}
+            </g>
+          ))}
 
           {columns.map((col, ci) => col.nodes.map((n, i) => {
             const y = TOP + i * (NODE_H + NODE_GAP);
@@ -308,6 +314,12 @@ function buildTopology(
     middle = [me];
     right = data.pods.filter(ownedBy(new Set([uid]))).map(nodeFor);
   } else if (kind === "StatefulSet" || kind === "DaemonSet" || kind === "Job") {
+    // Surface the controlling owner — frequently a custom resource
+    // (a Prometheus / VMAgent / a CronJob / any operator CRD). ownerNode
+    // resolves an arbitrary Kind via its apiVersion + plural heuristic.
+    const owner = (obj?.metadata?.ownerReferences ?? []).find((o: any) => o.controller)
+      ?? (obj?.metadata?.ownerReferences ?? [])[0];
+    if (owner) left = [ownerNode(owner, ns)];
     middle = [me];
     right = data.pods.filter(ownedBy(new Set([uid]))).map(nodeFor);
   } else if (kind === "CronJob") {

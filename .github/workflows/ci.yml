@@ -1,0 +1,88 @@
+name: ci
+
+# Sanity gate on every PR/commit, plus a moving multi-arch `:beta` image
+# from main so testers can pull the work-in-progress WITHOUT touching the
+# `:latest` / `:vX.Y.Z` tags real users run. Secrets are read from GitHub
+# Actions Secrets only — nothing is ever hard-coded in this file.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  GHCR_IMAGE: ghcr.io/beztebya666/k8s-view
+  DOCKERHUB_IMAGE: beztebya666/k8s-view
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Vet & build backend
+        run: |
+          go vet ./...
+          go build ./...
+
+  beta-image:
+    # Only from main (not PRs / forks) — publishes the rolling beta tag.
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: beztebya666
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          short=$(git rev-parse --short HEAD)
+          tags="${GHCR_IMAGE}:beta,${GHCR_IMAGE}:beta-${short}"
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            tags="${tags},${DOCKERHUB_IMAGE}:beta,${DOCKERHUB_IMAGE}:beta-${short}"
+          fi
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          echo "version=beta-${short}" >> "$GITHUB_OUTPUT"
+      - name: Build & push beta (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.tags.outputs.version }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

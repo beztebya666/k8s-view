@@ -600,7 +600,47 @@ sharing a node with a noisy neighbour.
 - The container tag, the Helm chart `appVersion`, and the binary's
   `--version` output are kept in sync.
 - The default branch is always shippable; tagged releases are what's
-  promoted to `ghcr.io`.
+  promoted to `ghcr.io` and Docker Hub.
+
+### CI/CD pipeline
+
+Two GitHub Actions workflows, no credentials in the repo — everything
+sensitive comes from **Actions Secrets** only.
+
+| Workflow | Trigger | Output |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | every PR & push to `main` | builds the frontend + backend as a sanity gate; on `main` also publishes a **rolling `:beta`** multi-arch image (`:beta` and `:beta-<sha>`) |
+| [`release.yml`](.github/workflows/release.yml) | tag `v*` **or** *Run workflow* | multi-arch `:vX.Y.Z` + `:latest` images **and** a GitHub Release with Linux/macOS/Windows binaries (amd64 + arm64) + `SHA256SUMS.txt` |
+
+The `:beta` tag is how testers run the work-in-progress **without ever
+touching the `:latest` / `:vX.Y.Z` images real users run** — `main` keeps
+moving `:beta`, the stable tags only move on an explicit release.
+
+**One-time setup** (repository → Settings → Secrets and variables → Actions):
+
+| Secret | Purpose | Required? |
+|---|---|---|
+| `GITHUB_TOKEN` | push to GHCR | built-in, nothing to do |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (**not** the account password) | optional — Docker Hub is mirrored only when this is set; GHCR works without it |
+
+> Create `DOCKERHUB_TOKEN` at Docker Hub → *Account Settings → Personal
+> access tokens*. Use a scoped access token, never the account password.
+
+**Cutting a release (the "say go" flow):**
+
+```bash
+# Option A — tag it
+git tag v0.5.0 && git push origin v0.5.0
+
+# Option B — no terminal needed
+# GitHub ▸ Actions ▸ release ▸ Run workflow ▸ version: v0.5.0
+```
+
+Either path builds and publishes `:v0.5.0` + `:latest` everywhere and
+attaches the binaries to the Release. Bump the in-tree version strings
+(`cmd/k8sview/main.go`, `Makefile`, `frontend/package.json`,
+`deploy/helm/Chart.yaml`, `deploy/k8s/all-in-one.yaml`, this README) in the
+commit you tag so `--version` matches the artifact.
 
 ---
 

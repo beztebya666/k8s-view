@@ -29,6 +29,11 @@ type ConfirmOpts = AlertOpts & {
   cancelLabel?: string;
   okLabel?: string;
   danger?: boolean;
+  // Optional third (destructive) button — e.g. "Force delete". Clicking
+  // it still resolves the confirm `true`; `onForce` fires first so the
+  // caller can branch. Backward-compatible: existing callers omit both.
+  forceLabel?: string;
+  onForce?: () => void;
 };
 
 type PromptOpts = {
@@ -293,6 +298,14 @@ function ModalHost({ pending, onResolved }: { pending: Pending; onResolved: () =
               >
                 {pending.cancelLabel ?? "Cancel"}
               </button>
+              {pending.forceLabel && (
+                <button
+                  className="btn-bad h-8 min-w-[80px] justify-center"
+                  onClick={() => { pending.onForce?.(); resolveConfirm(true); }}
+                >
+                  {pending.forceLabel}
+                </button>
+              )}
               <button
                 ref={okBtnRef}
                 className={clsx(

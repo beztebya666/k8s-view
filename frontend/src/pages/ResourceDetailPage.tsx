@@ -11,7 +11,7 @@ import {
   ArrowLeft, RefreshCcw, Trash2, Bell, Pencil,
   TerminalSquare, ScrollText, ChevronDown, Copy, Check, X,
   Info, Paperclip, Eye, EyeOff, KeyRound, Star, Scale, RotateCw, Pause, Play,
-  History, Lock, ShieldOff, Power,
+  History, Lock, ShieldOff, Power, WrapText,
 } from "lucide-react";
 import { api, GVR } from "../lib/api";
 import { notify_ } from "../lib/notifications";
@@ -156,21 +156,24 @@ export function ResourceDetailPage(props: DetailProps = {}) {
   };
 
   const onDelete = async () => {
+    let force = false;
     const ok = await modals.confirm({
       title: `Delete ${name}?`,
       body: namespace
-        ? `Namespace: ${namespace}. This action cannot be undone.`
-        : "This action cannot be undone.",
+        ? `Namespace: ${namespace}. This action cannot be undone. "Force delete" skips graceful termination (--force --grace-period=0) and may leave orphaned processes behind.`
+        : `This action cannot be undone. "Force delete" skips graceful termination (--force --grace-period=0) and may leave orphaned processes behind.`,
       danger: true,
       okLabel: "Delete",
+      forceLabel: "Force delete",
+      onForce: () => { force = true; },
     });
     if (!ok) return;
     try {
-      await api.deleteResource(cluster, gvr, namespace ?? null, name);
+      await api.deleteResource(cluster, gvr, namespace ?? null, name, force ? { force: true } : undefined);
       if (isPanel) onClose!();
       else navigate(-1);
     } catch (e: any) {
-      await modals.alert({ title: "Delete failed", body: e.message, tone: "bad" });
+      await modals.alert({ title: `${force ? "Force delete" : "Delete"} failed`, body: e.message, tone: "bad" });
     }
   };
 
@@ -1499,6 +1502,10 @@ function SummaryTab({ obj }: { obj: any }) {
         <DataSection obj={obj} />
       )}
 
+      {(obj.kind === "Secret" || obj.kind === "ConfigMap") && (
+        <MountedBySection obj={obj} />
+      )}
+
       {TOPOLOGY_KINDS.has(obj.kind) && (
         <Section title="Topology" collapsible defaultOpen>
           <div className="p-3"><TopologyGraph obj={obj} /></div>
@@ -1555,6 +1562,71 @@ function SpecSection({ spec, defaultOpen }: { spec: unknown; defaultOpen: boolea
   );
 }
 
+// MountedBySection — reverse lookup for a ConfigMap / Secret: every pod in
+// the same namespace that consumes it, as a volume, an envFrom, or an env
+// valueFrom. Answers "what breaks if I change this?" from the resource's
+// own panel instead of grepping pod specs.
+function podConsumesResource(pod: any, name: string, isSecret: boolean): string | null {
+  const spec = pod?.spec ?? {};
+  for (const v of spec.volumes ?? []) {
+    if (isSecret ? v?.secret?.secretName === name : v?.configMap?.name === name) return "volume";
+    for (const s of v?.projected?.sources ?? []) {
+      if (isSecret ? s?.secret?.name === name : s?.configMap?.name === name) return "volume";
+    }
+  }
+  const all = [...(spec.containers ?? []), ...(spec.initContainers ?? []), ...(spec.ephemeralContainers ?? [])];
+  for (const c of all) {
+    for (const ef of c?.envFrom ?? []) {
+      if (isSecret ? ef?.secretRef?.name === name : ef?.configMapRef?.name === name) return "envFrom";
+    }
+    for (const e of c?.env ?? []) {
+      const vf = e?.valueFrom;
+      if (isSecret ? vf?.secretKeyRef?.name === name : vf?.configMapKeyRef?.name === name) return "env";
+    }
+  }
+  return null;
+}
+
+function MountedBySection({ obj }: { obj: any }) {
+  const cluster = useApp((s) => s.cluster);
+  const ns: string | undefined = obj?.metadata?.namespace;
+  const name: string = obj?.metadata?.name ?? "";
+  const isSecret = obj?.kind === "Secret";
+  const { items: pods } = useResourceList(cluster, "/v1/Pod", ns, { enabled: !!cluster && !!ns });
+  const users = useMemo(() => {
+    const out: { pod: any; via: string }[] = [];
+    for (const p of pods) {
+      const via = podConsumesResource(p, name, isSecret);
+      if (via) out.push({ pod: p, via });
+    }
+    return out.sort((a, b) => (a.pod.metadata?.name ?? "").localeCompare(b.pod.metadata?.name ?? ""));
+  }, [pods, name, isSecret]);
+
+  return (
+    <Section title={`Mounted by (${users.length})`} collapsible defaultOpen={users.length > 0}>
+      {users.length === 0 ? (
+        <div className="px-3 py-2 text-fg-mute text-xs">
+          No pods in this namespace reference this {isSecret ? "Secret" : "ConfigMap"}.
+        </div>
+      ) : (
+        <ul className="divide-y divide-line/60">
+          {users.map(({ pod, via }) => (
+            <li key={pod.metadata?.uid ?? pod.metadata?.name} className="px-3 py-1.5 flex items-center gap-2">
+              <LinkCell
+                target={{ group: "core", version: "v1", resource: "pods", namespace: ns, name: pod.metadata.name }}
+                className="font-mono text-xs"
+              >
+                {pod.metadata.name}
+              </LinkCell>
+              <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wider text-fg-mute">{via}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
 // DataSection — shows ConfigMap/Secret payload entries as a Lens-style list.
 // Secret values are base64-decoded on display and hidden behind an eye toggle
 // (per-row and a "Reveal all" / "Hide all" master at the top). ConfigMap data
@@ -1567,6 +1639,10 @@ function DataSection({ obj }: { obj: any }) {
   const binaryData: Record<string, string> = obj.binaryData ?? {};
   const keys = [...Object.keys(data), ...Object.keys(binaryData)].sort();
   const [revealAll, setRevealAll] = useState(!isSecret);
+  // Word-wrap for long single-line values (helm release blobs, certs, …)
+  // so you can read them instead of scrolling forever right. Persisted
+  // and default-off, same contract as the log viewer's Wrap toggle.
+  const [wrap, setWrap] = usePersistedState<boolean>("k8s-view:data:wrap", false);
   if (keys.length === 0) {
     return (
       <Section title="Data">
@@ -1580,16 +1656,26 @@ function DataSection({ obj }: { obj: any }) {
         <span className="text-fg-mute">
           {isSecret ? `Secret type: ${obj.type ?? "Opaque"}` : "ConfigMap"}
         </span>
-        {isSecret && (
+        <div className="flex items-center gap-3">
           <button
-            className="text-fg-soft hover:text-fg inline-flex items-center gap-1"
-            onClick={() => setRevealAll((v) => !v)}
-            title={revealAll ? "Hide all values" : "Reveal all values"}
+            className={clsx("inline-flex items-center gap-1 hover:text-fg", wrap ? "text-accent" : "text-fg-soft")}
+            onClick={() => setWrap((v) => !v)}
+            title={wrap ? "Disable word wrap" : "Wrap long values instead of scrolling sideways"}
           >
-            {revealAll ? <EyeOff size={12} /> : <Eye size={12} />}
-            <span>{revealAll ? "Hide all" : "Reveal all"}</span>
+            <WrapText size={12} />
+            <span>Wrap</span>
           </button>
-        )}
+          {isSecret && (
+            <button
+              className="text-fg-soft hover:text-fg inline-flex items-center gap-1"
+              onClick={() => setRevealAll((v) => !v)}
+              title={revealAll ? "Hide all values" : "Reveal all values"}
+            >
+              {revealAll ? <EyeOff size={12} /> : <Eye size={12} />}
+              <span>{revealAll ? "Hide all" : "Reveal all"}</span>
+            </button>
+          )}
+        </div>
       </div>
       <ul className="divide-y divide-line/60">
         {keys.map((k) => (
@@ -1599,6 +1685,7 @@ function DataSection({ obj }: { obj: any }) {
             raw={data[k] ?? binaryData[k] ?? ""}
             kind={k in binaryData ? "binary" : (isSecret ? "base64" : "plain")}
             forceReveal={revealAll}
+            wrap={wrap}
           />
         ))}
       </ul>
@@ -1607,12 +1694,13 @@ function DataSection({ obj }: { obj: any }) {
 }
 
 function DataRow({
-  name, raw, kind, forceReveal,
+  name, raw, kind, forceReveal, wrap,
 }: {
   name: string;
   raw: string;
   kind: "plain" | "base64" | "binary";
   forceReveal: boolean;
+  wrap: boolean;
 }) {
   const [revealed, setRevealed] = useState(forceReveal);
   const [expanded, setExpanded] = useState(false);
@@ -1667,7 +1755,8 @@ function DataRow({
       {!isBinary && !showJwt && (
         <pre
           className={clsx(
-            "font-mono text-[11px] leading-snug mt-1 px-2 py-1 rounded bg-bg border border-line/60 overflow-x-auto",
+            "font-mono text-[11px] leading-snug mt-1 px-2 py-1 rounded bg-bg border border-line/60",
+            wrap ? "whitespace-pre-wrap break-all" : "overflow-x-auto",
             collapsible && !expanded && "max-h-[88px] overflow-y-hidden",
           )}
         >

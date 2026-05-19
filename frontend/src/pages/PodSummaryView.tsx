@@ -156,6 +156,12 @@ export function PodSummaryView({ obj }: { obj: Pod }) {
         <KVRow k="Affinities">
           <AffinitiesBlock affinity={affinity} />
         </KVRow>
+
+        {(spec.volumes?.length ?? 0) > 0 && (
+          <KVRow k="Volumes">
+            <VolumesBlock volumes={spec.volumes} ns={meta.namespace} saName={spec.serviceAccountName} goRef={goRef} />
+          </KVRow>
+        )}
       </div>
 
       {initContainerRows.length > 0 && (
@@ -284,6 +290,159 @@ function DetailLink({
   );
 }
 
+// --- Volumes ----------------------------------------------------------
+// The per-container "Mounts" row shows WHERE a volume lands; this shows
+// WHAT each pod volume actually is. ConfigMap / Secret / PVC sources are
+// clickable straight into their detail panel.
+// volumeSourceRef — the clickable resource behind a pod volume, if any.
+// ConfigMap / Secret / PVC resolve to a real object; emptyDir / projected
+// / hostPath / etc. have nothing to drill into → null.
+export function volumeSourceRef(v: any, ns?: string, saName?: string): DetailRef | null {
+  if (v?.configMap?.name) return { group: "core", version: "v1", resource: "configmaps", namespace: ns, name: v.configMap.name };
+  if (v?.secret?.secretName) return { group: "core", version: "v1", resource: "secrets", namespace: ns, name: v.secret.secretName };
+  if (v?.persistentVolumeClaim?.claimName) return { group: "core", version: "v1", resource: "persistentvolumeclaims", namespace: ns, name: v.persistentVolumeClaim.claimName };
+  // A projected volume bundles several sources and can't expand inside a
+  // one-line mount row. Pick the most useful single target: the
+  // ServiceAccount for the ubiquitous `kube-api-access-*` token mount,
+  // else a lone configMap / secret if that's all it carries.
+  const srcs: any[] = v?.projected?.sources ?? [];
+  if (srcs.length > 0) {
+    if (srcs.some((s) => s?.serviceAccountToken)) {
+      return saName
+        ? { group: "core", version: "v1", resource: "serviceaccounts", namespace: ns, name: saName }
+        : null;
+    }
+    const cms = srcs.filter((s) => s?.configMap?.name);
+    const secs = srcs.filter((s) => s?.secret?.name);
+    if (cms.length === 1 && secs.length === 0) {
+      return { group: "core", version: "v1", resource: "configmaps", namespace: ns, name: cms[0].configMap.name };
+    }
+    if (secs.length === 1 && cms.length === 0) {
+      return { group: "core", version: "v1", resource: "secrets", namespace: ns, name: secs[0].secret.name };
+    }
+  }
+  return null;
+}
+
+function volumeSourceLabel(v: any): string {
+  if (v?.configMap?.name) return `ConfigMap/${v.configMap.name}`;
+  if (v?.secret?.secretName) return `Secret/${v.secret.secretName}`;
+  if (v?.persistentVolumeClaim?.claimName) return `PVC/${v.persistentVolumeClaim.claimName}`;
+  if (v?.emptyDir) return `emptyDir${v.emptyDir.medium ? ` (${v.emptyDir.medium})` : ""}`;
+  if (v?.projected) return `projected (${(v.projected.sources ?? []).length} sources)`;
+  if (v?.hostPath) return `hostPath ${v.hostPath.path ?? ""}`.trim();
+  if (v?.downwardAPI) return "downwardAPI";
+  if (v?.csi) return `csi ${v.csi.driver ?? ""}`.trim();
+  if (v?.nfs) return `nfs ${v.nfs.server ?? ""}:${v.nfs.path ?? ""}`;
+  return Object.keys(v ?? {}).find((k) => k !== "name") ?? "unknown";
+}
+
+function VolumesBlock({
+  volumes, ns, saName, goRef,
+}: { volumes: any[]; ns?: string; saName?: string; goRef: (r: DetailRef) => void }) {
+  if (!volumes || volumes.length === 0) return <span className="text-fg-mute">—</span>;
+  return (
+    <div className="space-y-1">
+      {volumes.map((v: any, i: number) => {
+        const ref = volumeSourceRef(v, ns);
+        // `projected` bundles several sources — expand them so the
+        // configMap / secret / SA-token inside are visible and
+        // drillable instead of an opaque "projected (3 sources)".
+        if (v?.projected) {
+          const sources: any[] = v.projected.sources ?? [];
+          return (
+            <div key={v?.name ?? i} className="font-mono text-[11px]">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate">{v?.name ?? "—"}</span>
+                <span className="text-fg-mute shrink-0">→</span>
+                <span className="text-fg-mute">projected</span>
+              </div>
+              <div className="mt-0.5 pl-4 border-l border-line/60 space-y-0.5">
+                {sources.length === 0 && <span className="text-fg-mute">no sources</span>}
+                {sources.map((s, si) => (
+                  <ProjectedSource key={si} s={s} ns={ns} saName={saName} goRef={goRef} />
+                ))}
+              </div>
+            </div>
+          );
+        }
+        const label = volumeSourceLabel(v);
+        return (
+          <div key={v?.name ?? i} className="font-mono text-[11px] flex items-center gap-1.5">
+            {ref
+              ? <DetailLink goRef={goRef} target={ref}>{v?.name ?? "—"}</DetailLink>
+              : <span className="truncate">{v?.name ?? "—"}</span>}
+            <span className="text-fg-mute shrink-0">→</span>
+            {ref
+              ? <DetailLink goRef={goRef} target={ref}>{label}</DetailLink>
+              : <span className="text-fg-mute truncate">{label}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// One entry inside a projected volume. configMap / secret are real
+// objects → links; the SA token points at the pod's ServiceAccount;
+// downwardAPI / clusterTrustBundle are descriptive only.
+function ProjectedSource({
+  s, ns, saName, goRef,
+}: { s: any; ns?: string; saName?: string; goRef: (r: DetailRef) => void }) {
+  if (s?.configMap?.name) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="text-fg-mute">configMap →</span>
+        <DetailLink goRef={goRef} target={{ group: "core", version: "v1", resource: "configmaps", namespace: ns, name: s.configMap.name }}>
+          {s.configMap.name}
+        </DetailLink>
+        {s.configMap.optional && <span className="text-fg-mute">(optional)</span>}
+      </div>
+    );
+  }
+  if (s?.secret?.name) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="text-fg-mute">secret →</span>
+        <DetailLink goRef={goRef} target={{ group: "core", version: "v1", resource: "secrets", namespace: ns, name: s.secret.name }}>
+          {s.secret.name}
+        </DetailLink>
+        {s.secret.optional && <span className="text-fg-mute">(optional)</span>}
+      </div>
+    );
+  }
+  if (s?.serviceAccountToken) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <span className="text-fg-mute">serviceAccountToken →</span>
+        {saName ? (
+          <DetailLink goRef={goRef} target={{ group: "core", version: "v1", resource: "serviceaccounts", namespace: ns, name: saName }}>
+            {saName}
+          </DetailLink>
+        ) : <span className="text-fg-mute">default</span>}
+      </div>
+    );
+  }
+  if (s?.downwardAPI) {
+    // Not a resource — it projects this pod's own metadata as files.
+    // Nothing to drill into; instead spell out which fields it exposes.
+    const fields = (s.downwardAPI.items ?? [])
+      .map((it: any) => it?.fieldRef?.fieldPath ?? it?.resourceFieldRef?.resource ?? it?.path)
+      .filter(Boolean);
+    return (
+      <div
+        className="text-fg-mute"
+        title="Projects this pod's own metadata as files — no separate object to open."
+      >
+        downwardAPI{fields.length > 0 && <span> → {fields.join(", ")}</span>}
+      </div>
+    );
+  }
+  if (s?.clusterTrustBundle) return <div className="text-fg-mute">clusterTrustBundle {s.clusterTrustBundle.name ?? s.clusterTrustBundle.signerName ?? ""}</div>;
+  const t = Object.keys(s ?? {})[0];
+  return <div className="text-fg-mute">{t ?? "source"}</div>;
+}
+
 // --- Tolerations & Affinities -----------------------------------------
 
 function TolerationsBlock({ list }: { list: any[] }) {
@@ -397,6 +556,14 @@ function ContainerSection({
 function ContainerCard({ spec, status, pod }: { spec: any; status?: any; pod: Pod }) {
   const ns = pod?.metadata?.namespace ?? "default";
   const podName = pod?.metadata?.name ?? "";
+  const goRef = useDetailNavigator();
+  // mountPath ← volumeName: resolve volumeName back to the pod volume so
+  // the mount can drill straight into its ConfigMap / Secret / PVC.
+  const volByName = useMemo(() => {
+    const m = new Map<string, any>();
+    for (const v of pod?.spec?.volumes ?? []) if (v?.name) m.set(v.name, v);
+    return m;
+  }, [pod]);
   const kubeStatus = containerDisplayStatus(pod, spec.name);
   const stateKey = status?.state ? Object.keys(status.state)[0] : undefined;
   const state = stateKey
@@ -452,11 +619,18 @@ function ContainerCard({ spec, status, pod }: { spec: any; status?: any; pod: Po
         {(spec.volumeMounts?.length ?? 0) > 0 && (
           <KVRow k="Mounts">
             <div className="space-y-0.5">
-              {(spec.volumeMounts ?? []).map((m: any, i: number) => (
-                <div key={i} className="font-mono text-[11px]">
-                  {m.mountPath} <span className="text-fg-mute">← {m.name}{m.readOnly ? " (ro)" : ""}{m.subPath ? `:${m.subPath}` : ""}</span>
-                </div>
-              ))}
+              {(spec.volumeMounts ?? []).map((m: any, i: number) => {
+                const ref = volumeSourceRef(volByName.get(m.name), ns, pod?.spec?.serviceAccountName);
+                return (
+                  <div key={i} className="font-mono text-[11px]">
+                    {m.mountPath} <span className="text-fg-mute">← </span>
+                    {ref
+                      ? <DetailLink goRef={goRef} target={ref}>{m.name}</DetailLink>
+                      : <span className="text-fg-mute">{m.name}</span>}
+                    <span className="text-fg-mute">{m.readOnly ? " (ro)" : ""}{m.subPath ? `:${m.subPath}` : ""}</span>
+                  </div>
+                );
+              })}
             </div>
           </KVRow>
         )}

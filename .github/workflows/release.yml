@@ -1,0 +1,213 @@
+name: release
+
+# Cuts a real, user-facing release. Two ways to fire it:
+#
+#   • push a tag      git tag v0.5.0 && git push origin v0.5.0
+#   • "say go" button  Actions ▸ release ▸ Run workflow ▸ version: v0.5.0
+#
+# Both produce the SAME thing: multi-arch `:vX.Y.Z` + `:latest` images on
+# GHCR (and Docker Hub when the secret is set) and a GitHub Release with
+# pre-built binaries for Linux / macOS / Windows (amd64 + arm64), each with
+# the React UI baked in, plus a SHA256SUMS file. No secrets are ever written
+# into this file — they come from GitHub Actions Secrets only.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. v0.5.0)"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GHCR_IMAGE: ghcr.io/beztebya666/k8s-view
+  DOCKERHUB_IMAGE: beztebya666/k8s-view
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      raw: ${{ steps.v.outputs.raw }}
+    steps:
+      - id: v
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ver="${{ inputs.version }}"
+          else
+            ver="${GITHUB_REF_NAME}"
+          fi
+          case "$ver" in v*) ;; *) ver="v$ver" ;; esac
+          echo "version=${ver}"  >> "$GITHUB_OUTPUT"
+          echo "raw=${ver#v}"    >> "$GITHUB_OUTPUT"
+          echo "Releasing ${ver}"
+
+  # Build the SPA exactly once and hand the embed-ready dist to every binary.
+  frontend:
+    needs: prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: internal/web/dist
+          retention-days: 1
+          if-no-files-found: error
+
+  binaries:
+    needs: [prep, frontend]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Restore embedded UI
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: internal/web/dist
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${v#v} -X main.commit=${GITHUB_SHA::7}" \
+            -o "build/k8s-view${{ matrix.ext }}" ./cmd/k8sview
+      - name: Package
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          base="k8s-view_${v}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          cp README.md LICENSE build/ 2>/dev/null || cp README.md build/ 2>/dev/null || true
+          cd build
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -q "${base}.zip" k8s-view${{ matrix.ext }} README.md LICENSE 2>/dev/null \
+              || zip -q "${base}.zip" k8s-view${{ matrix.ext }}
+          else
+            tar -czf "${base}.tar.gz" k8s-view${{ matrix.ext }} README.md LICENSE 2>/dev/null \
+              || tar -czf "${base}.tar.gz" k8s-view${{ matrix.ext }}
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            build/*.tar.gz
+            build/*.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  image:
+    needs: prep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: beztebya666
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          tags="${GHCR_IMAGE}:${v},${GHCR_IMAGE}:latest"
+          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            tags="${tags},${DOCKERHUB_IMAGE}:${v},${DOCKERHUB_IMAGE}:latest"
+          fi
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+      - name: Build & push (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.prep.outputs.version }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [prep, binaries, image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum k8s-view_* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Release notes
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          {
+            echo "## k8s-view ${v}"
+            echo
+            echo "A single-binary, real-time Kubernetes dashboard — the whole UI is"
+            echo "baked into one executable. No agent, no database, no Helm required."
+            echo
+            echo "### Container images (multi-arch \`amd64\` + \`arm64\`)"
+            echo '```'
+            echo "docker pull ${GHCR_IMAGE}:${v}"
+            echo "docker pull ${DOCKERHUB_IMAGE}:${v}"
+            echo '```'
+            echo
+            echo "### Binaries"
+            echo "Grab the archive for your OS/arch below, extract, and run \`./k8s-view\`."
+            echo "Verify downloads against \`SHA256SUMS.txt\`."
+          } > notes.md
+          cat notes.md
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prep.outputs.version }}
+          name: ${{ needs.prep.outputs.version }}
+          body_path: notes.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/k8s-view_*
+            dist/SHA256SUMS.txt

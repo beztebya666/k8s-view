@@ -291,6 +291,7 @@ function defaultActions(
       },
       { label: "Edit",       icon: FileCode2,  onClick: (it) => openYamlEdit(it) },
       { label: "Delete",     icon: Trash2,     danger: true, onClick: (it) => deleteResource(cluster, gvr, it) },
+      { label: "Force delete", icon: Trash2,   danger: true, onClick: (it) => deleteResource(cluster, gvr, it, true) },
     ];
   }
 
@@ -310,6 +311,7 @@ function defaultActions(
       { label: "Edit",     icon: FileCode2, onClick: (it) => openYamlEdit(it) },
       { label: "Describe", icon: FileText,  onClick: (it) => openDetail(it) },
       { label: "Delete",   icon: Trash2,    danger: true, onClick: (it) => deleteResource(cluster, gvr, it) },
+      { label: "Force delete", icon: Trash2, danger: true, onClick: (it) => deleteResource(cluster, gvr, it, true) },
     ];
   }
 
@@ -331,6 +333,7 @@ function defaultActions(
       { label: "Edit",     icon: FileCode2, onClick: (it) => openYamlEdit(it) },
       { label: "Describe", icon: FileText,  onClick: (it) => openDetail(it) },
       { label: "Delete",   icon: Trash2,    danger: true, onClick: (it) => deleteResource(cluster, gvr, it) },
+      { label: "Force delete", icon: Trash2, danger: true, onClick: (it) => deleteResource(cluster, gvr, it, true) },
     );
     return actions;
   }
@@ -339,6 +342,7 @@ function defaultActions(
     { label: "Edit YAML", icon: FileCode2, onClick: (it) => openYamlEdit(it) },
     { label: "Describe",  icon: FileText,  onClick: (it) => openDetail(it) },
     { label: "Delete",    icon: Trash2,    danger: true, onClick: (it) => deleteResource(cluster, gvr, it) },
+    { label: "Force delete", icon: Trash2, danger: true, onClick: (it) => deleteResource(cluster, gvr, it, true) },
   ];
 }
 
@@ -349,6 +353,12 @@ function defaultBulkActions(cluster: string, gvr: string): BulkAction[] {
       icon: Trash2,
       danger: true,
       onClick: (items) => deleteResources(cluster, gvr, items),
+    },
+    {
+      label: "Force delete selected",
+      icon: Trash2,
+      danger: true,
+      onClick: (items) => deleteResources(cluster, gvr, items, true),
     },
   ];
 }
@@ -652,35 +662,40 @@ async function evictPod(cluster: string, it: Item) {
   }
 }
 
-async function deleteResource(cluster: string, gvr: string, it: Item) {
+async function deleteResource(cluster: string, gvr: string, it: Item, force = false) {
+  const nsLine = it.metadata.namespace ? `Namespace: ${it.metadata.namespace}. ` : "";
   const ok = await modals.confirm({
-    title: `Delete ${it.kind ?? prettyKind(gvr)} ${it.metadata.name}?`,
-    body: it.metadata.namespace
-      ? `Namespace: ${it.metadata.namespace}. This action cannot be undone.`
-      : "This action cannot be undone.",
+    title: `${force ? "Force delete" : "Delete"} ${it.kind ?? prettyKind(gvr)} ${it.metadata.name}?`,
+    body: force
+      ? `${nsLine}Force delete skips graceful termination (--force --grace-period=0). The object is removed from the API server immediately even if its controller never confirms. This can leave orphaned processes/containers behind. Cannot be undone.`
+      : `${nsLine}This action cannot be undone.`,
     danger: true,
-    okLabel: "Delete",
+    okLabel: force ? "Force delete" : "Delete",
   });
   if (!ok) return;
   const [g, v, k] = gvr.split("/");
   try {
     await api.deleteResource(cluster, { group: g, version: v, resource: pluralise(k) },
-      it.metadata.namespace ?? null, it.metadata.name);
+      it.metadata.namespace ?? null, it.metadata.name, force ? { force: true } : undefined);
   } catch (e: any) {
-    await modals.alert({ title: "Delete failed", body: e.message, tone: "bad" });
+    await modals.alert({ title: `${force ? "Force delete" : "Delete"} failed`, body: e.message, tone: "bad" });
   }
 }
 
-async function deleteResources(cluster: string, gvr: string, items: Item[]) {
+async function deleteResources(cluster: string, gvr: string, items: Item[], force = false) {
   if (items.length === 0) return false;
   const kind = items[0]?.kind ?? prettyKind(gvr);
   const sample = items.slice(0, 8);
   const hidden = items.length - sample.length;
   const ok = await modals.confirm({
-    title: `Delete ${items.length} selected ${kind}${items.length === 1 ? "" : "s"}?`,
+    title: `${force ? "Force delete" : "Delete"} ${items.length} selected ${kind}${items.length === 1 ? "" : "s"}?`,
     body: (
       <div className="space-y-2">
-        <div>This action cannot be undone.</div>
+        <div>
+          {force
+            ? "Force delete skips graceful termination (--force --grace-period=0) for every item below — removed from the API server immediately, may leave orphaned processes. Cannot be undone."
+            : "This action cannot be undone."}
+        </div>
         <div className="max-h-40 overflow-auto rounded-md border border-line bg-bg px-2 py-1 font-mono text-xs">
           {sample.map((it) => (
             <div key={it.metadata.uid ?? `${it.metadata.namespace}/${it.metadata.name}`} className="truncate">
@@ -692,14 +707,14 @@ async function deleteResources(cluster: string, gvr: string, items: Item[]) {
       </div>
     ),
     danger: true,
-    okLabel: "Delete",
+    okLabel: force ? "Force delete" : "Delete",
   });
   if (!ok) return false;
 
   const [g, v, k] = gvr.split("/");
   const ref = { group: g, version: v, resource: pluralise(k) };
   const results = await Promise.allSettled(items.map((it) =>
-    api.deleteResource(cluster, ref, it.metadata.namespace ?? null, it.metadata.name),
+    api.deleteResource(cluster, ref, it.metadata.namespace ?? null, it.metadata.name, force ? { force: true } : undefined),
   ));
   const failures = results
     .map((r, i) => ({ result: r, item: items[i] }))
