@@ -55,11 +55,14 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
+        # A user-owned PAT (write:packages) — the GHCR package pre-dates this
+        # workflow and a pre-existing package does not auto-trust the repo's
+        # GITHUB_TOKEN, which yields "denied: write_package" on push.
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: beztebya666
+          password: ${{ secrets.GHCR_TOKEN }}
       - name: Log in to Docker Hub
         if: env.HAS_DOCKERHUB == 'true'
         uses: docker/login-action@v3

@@ -620,11 +620,19 @@ moving `:beta`, the stable tags only move on an explicit release.
 
 | Secret | Purpose | Required? |
 |---|---|---|
-| `GITHUB_TOKEN` | push to GHCR | built-in, nothing to do |
-| `DOCKERHUB_TOKEN` | Docker Hub access token (**not** the account password) | optional — Docker Hub is mirrored only when this is set; GHCR works without it |
+| `GHCR_TOKEN` | push to GHCR (GitHub Container Registry) | required |
+| `DOCKERHUB_TOKEN` | Docker Hub access token (**not** the account password) | optional — Docker Hub is mirrored only when this is set |
 
-> Create `DOCKERHUB_TOKEN` at Docker Hub → *Account Settings → Personal
-> access tokens*. Use a scoped access token, never the account password.
+> `GHCR_TOKEN` is a GitHub Personal Access Token with the `write:packages`
+> scope. The built-in `GITHUB_TOKEN` is **not** used for GHCR here: the
+> container package pre-dates the workflow, and a pre-existing package does
+> not automatically grant the repo's `GITHUB_TOKEN` write access. A scoped
+> PAT side-steps that. (Alternatively, grant the repo Write access under the
+> package's *Manage Actions access* and switch the login back to
+> `GITHUB_TOKEN` — then no secret is needed.)
+>
+> `DOCKERHUB_TOKEN`: create at Docker Hub → *Account Settings → Personal
+> access tokens* with **Read & Write** permission. Never the account password.
 
 **Cutting a release (the "say go" flow):**
 
