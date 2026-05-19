@@ -2,14 +2,20 @@ name: release
 
 # Cuts a real, user-facing release. Two ways to fire it:
 #
-#   • push a tag      git tag v0.5.0 && git push origin v0.5.0
-#   • "say go" button  Actions ▸ release ▸ Run workflow ▸ version: v0.5.0
+#   • "Promote beta"  Actions ▸ release ▸ Run workflow ▸ version: v0.4.1
+#                     source: promote-beta   (DEFAULT)
+#       → the EXACT multi-arch image you tested as `:beta` is re-tagged to
+#         `:vX.Y.Z` + `:latest` by digest. No rebuild — bit-for-bit what
+#         you validated. Seconds, not minutes.
 #
-# Both produce the SAME thing: multi-arch `:vX.Y.Z` + `:latest` images on
-# GHCR (and Docker Hub when the secret is set) and a GitHub Release with
-# pre-built binaries for Linux / macOS / Windows (amd64 + arm64), each with
-# the React UI baked in, plus a SHA256SUMS file. No secrets are ever written
-# into this file — they come from GitHub Actions Secrets only.
+#   • Tagged rebuild  git tag v0.5.0 && git push origin v0.5.0
+#       → a fresh, fully reproducible build from that exact commit.
+#         (Also reachable via Run workflow with source: rebuild.)
+#
+# Either way you also get a GitHub Release with binaries for
+# Linux / macOS / Windows (amd64 + arm64), the React UI baked in, and a
+# SHA256SUMS file. No secrets are ever written into this file — they come
+# from GitHub Actions Secrets only.
 
 on:
   push:
@@ -17,8 +23,13 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. v0.5.0)"
+        description: "Version to release (e.g. v0.4.1)"
         required: true
+      source:
+        description: "promote-beta = ship the tested :beta as-is | rebuild = build fresh from this ref"
+        type: choice
+        options: [promote-beta, rebuild]
+        default: promote-beta
 
 permissions:
   contents: write
@@ -34,18 +45,102 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       raw: ${{ steps.v.outputs.raw }}
+      mode: ${{ steps.v.outputs.mode }}
     steps:
       - id: v
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ver="${{ inputs.version }}"
+            mode="${{ inputs.source }}"
           else
             ver="${GITHUB_REF_NAME}"
+            mode="rebuild"            # a pushed tag is always a from-source release
           fi
           case "$ver" in v*) ;; *) ver="v$ver" ;; esac
           echo "version=${ver}"  >> "$GITHUB_OUTPUT"
           echo "raw=${ver#v}"    >> "$GITHUB_OUTPUT"
-          echo "Releasing ${ver}"
+          echo "mode=${mode}"    >> "$GITHUB_OUTPUT"
+          echo "Releasing ${ver} via ${mode}"
+
+  # ── Path A: promote the already-built, already-tested :beta by digest ──
+  promote:
+    needs: prep
+    if: needs.prep.outputs.mode == 'promote-beta'
+    runs-on: ubuntu-latest
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: beztebya666
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Re-tag :beta → :version + :latest (no rebuild)
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          src="${GHCR_IMAGE}:beta"
+          # imagetools copies the whole multi-arch manifest by digest.
+          docker buildx imagetools create \
+            -t "${GHCR_IMAGE}:${v}" -t "${GHCR_IMAGE}:latest" "${src}"
+          if [ "${HAS_DOCKERHUB}" = "true" ]; then
+            docker buildx imagetools create \
+              -t "${DOCKERHUB_IMAGE}:${v}" -t "${DOCKERHUB_IMAGE}:latest" "${src}"
+          fi
+          echo "Promoted ${src} → ${v} + latest"
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${v}" | head -20
+
+  # ── Path B: deterministic rebuild from this exact commit ──
+  rebuild:
+    needs: prep
+    if: needs.prep.outputs.mode == 'rebuild'
+    runs-on: ubuntu-latest
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: beztebya666
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Compute tags
+        id: tags
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          tags="${GHCR_IMAGE}:${v},${GHCR_IMAGE}:latest"
+          if [ "${HAS_DOCKERHUB}" = "true" ]; then
+            tags="${tags},${DOCKERHUB_IMAGE}:${v},${DOCKERHUB_IMAGE}:latest"
+          fi
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+      - name: Build & push (amd64 + arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.prep.outputs.version }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # Build the SPA exactly once and hand the embed-ready dist to every binary.
   frontend:
@@ -125,49 +220,10 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  image:
-    needs: prep
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub
-        if: ${{ secrets.DOCKERHUB_TOKEN != '' }}
-        uses: docker/login-action@v3
-        with:
-          username: beztebya666
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Compute tags
-        id: tags
-        run: |
-          v="${{ needs.prep.outputs.version }}"
-          tags="${GHCR_IMAGE}:${v},${GHCR_IMAGE}:latest"
-          if [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
-            tags="${tags},${DOCKERHUB_IMAGE}:${v},${DOCKERHUB_IMAGE}:latest"
-          fi
-          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
-      - name: Build & push (amd64 + arm64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          build-args: |
-            VERSION=${{ needs.prep.outputs.version }}
-            COMMIT=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   release:
-    needs: [prep, binaries, image]
+    needs: [prep, binaries, promote, rebuild]
+    # promote XOR rebuild runs; tolerate the skipped one but bail on real failure.
+    if: ${{ always() && needs.binaries.result == 'success' && needs.promote.result != 'failure' && needs.rebuild.result != 'failure' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
