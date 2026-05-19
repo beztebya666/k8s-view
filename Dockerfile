@@ -11,7 +11,8 @@ WORKDIR /web
 COPY frontend/package.json ./
 RUN npm install --no-audit --no-fund
 COPY frontend/ ./
-COPY internal/web/dist /go/internal/web/dist
+# Vite creates --outDir itself; internal/web/dist is gitignored / not in the
+# build context, so we must NOT try to COPY it from the host here.
 RUN npm run build -- --outDir /go/internal/web/dist --emptyOutDir
 
 # ───────────────────────────── 2) backend build ──────────────────────────────
