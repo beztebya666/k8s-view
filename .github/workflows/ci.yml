@@ -95,3 +95,10 @@ jobs:
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Prune orphaned GHCR versions
+        # Each :beta overwrite orphans the previous build's per-arch
+        # manifests. This deletes those (and only those) — every manifest
+        # still referenced by a live tag is kept. Best-effort, never fails CI.
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: python3 .github/scripts/prune-ghcr.py

@@ -28,18 +28,20 @@ import { age } from "../../lib/format";
 // whole screen. The previous hardcoded 240px was the bug the user spotted:
 // no matter how wide the detail pane got, names were still clipped to ~30
 // chars because that's all the column made room for.
-const NODE_H = 44;
+// 58px fits three text rows: kind, name, and an optional third line (the
+// container image tag on Pod cards). Non-Pod cards leave the third row
+// blank — a uniform height keeps the edge/row math trivial and the small
+// extra whitespace reads fine.
+const NODE_H = 58;
 const NODE_GAP = 10;
 const TOP = 18;
 const COL_GAP = 60;
 const SIDE_PAD = 12;
 const COL_W_MIN = 200;
-// 360px ≈ ~45 monospace chars at 12px — covers virtually all real pod
-// names (`<deployment>-<rs>-<id>` typically ≤ 45 chars). Past that the
-// card looks like an empty banner; rare 50+ char names still get a tooltip
-// via the SVG <title>. Picked over the previous 520 because a single-card
-// row at full pane width was visually noisy.
-const COL_W_MAX = 360;
+// 460px ≈ ~60 monospace chars at 12px — covers essentially every real pod
+// name (`<deployment>-<rs>-<id>`). Past that the card looks like an empty
+// banner; rare longer names still get a tooltip via the SVG <title>.
+const COL_W_MAX = 460;
 // Approx pixel width of one JetBrains Mono character at 12px — used to map
 // available column pixels to a name char-clip threshold. Empirical: monaco
 // 12px averages ~7.2px / char including padding margins.
@@ -54,6 +56,10 @@ interface Node {
    *  ref only includes kind/name/uid) so the corner stays empty there. */
   creationTimestamp?: string;
   sub?: string;
+  /** Container image tag for leaf Pod cards, rendered on a third line as
+   *  `:v0.3.1`. Lets an operator read which build is actually running
+   *  without opening the pod. Empty for non-Pod nodes. */
+  version?: string;
   tone: "ok" | "warn" | "bad" | "info" | "mute";
 }
 
@@ -252,22 +258,32 @@ function NodeBox({ node, x, y, colW, onClick }: { node: Node; x: number; y: numb
   const ageStr = node.creationTimestamp ? age(node.creationTimestamp, clusterNow()) : "";
   return (
     <g style={{ cursor: "pointer" }} onClick={onClick}>
-      <title>{node.kind}: {node.label}{node.sub ? ` (${node.sub})` : ""}{ageStr ? ` · age ${ageStr}` : ""}</title>
+      <title>
+        {node.kind}: {node.label}
+        {node.sub ? ` (${node.sub})` : ""}
+        {node.version ? ` · ${node.version}` : ""}
+        {ageStr ? ` · age ${ageStr}` : ""}
+      </title>
       <rect x={x} y={y} width={colW} height={NODE_H} rx={6} fill={fill} stroke={stroke} />
-      <text x={x + 10} y={y + 18} className="fill-fg-mute" fontSize={10} fontFamily="JetBrains Mono, monospace">
+      <text x={x + 10} y={y + 16} className="fill-fg-mute" fontSize={10} fontFamily="JetBrains Mono, monospace">
         {node.kind}
       </text>
       {ageStr && (
-        <text x={x + colW - 8} y={y + 18} textAnchor="end" className="fill-fg-mute" fontSize={10} fontFamily="JetBrains Mono, monospace">
+        <text x={x + colW - 8} y={y + 16} textAnchor="end" className="fill-fg-mute" fontSize={10} fontFamily="JetBrains Mono, monospace">
           {ageStr}
         </text>
       )}
-      <text x={x + 10} y={y + 33} className="fill-fg" fontSize={12} fontFamily="JetBrains Mono, monospace">
+      <text x={x + 10} y={y + 34} className="fill-fg" fontSize={12} fontFamily="JetBrains Mono, monospace">
         {clip(node.label, nameClip)}
       </text>
       {node.sub && (
-        <text x={x + colW - 8} y={y + 33} textAnchor="end" className="fill-fg-mute" fontSize={10} fontFamily="JetBrains Mono, monospace">
+        <text x={x + colW - 8} y={y + 34} textAnchor="end" className="fill-fg-mute" fontSize={10} fontFamily="JetBrains Mono, monospace">
           {clip(node.sub, 14)}
+        </text>
+      )}
+      {node.version && (
+        <text x={x + 10} y={y + 50} className="fill-info" fontSize={10} fontFamily="JetBrains Mono, monospace">
+          {clip(node.version, Math.max(12, Math.floor((colW - 20) / CHAR_PX)))}
         </text>
       )}
     </g>
@@ -411,6 +427,7 @@ function nodeFor(it: any): Node {
   const meta = it?.metadata ?? {};
   let tone: Node["tone"] = "info";
   let sub: string | undefined;
+  let imageVer: string | undefined;
 
   if (kind === "Pod") {
     const phase = it?.status?.phase;
@@ -420,6 +437,14 @@ function nodeFor(it: any): Node {
       phase === "Failed" || phase === "Unknown" ? "bad" :
       "mute";
     sub = phase;
+    // Surface the running build. Almost every pod has a single app
+    // container; we show its tag — the number the operator actually
+    // cares about — without making them open the pod.
+    const containers: any[] = it?.spec?.containers ?? [];
+    if (containers.length > 0) {
+      const tag = imageTag(String(containers[0]?.image ?? ""));
+      if (tag) imageVer = tag;
+    }
   } else if (kind === "ReplicaSet") {
     const desired = Number(it?.spec?.replicas ?? 0);
     const ready = Number(it?.status?.readyReplicas ?? 0);
@@ -455,7 +480,27 @@ function nodeFor(it: any): Node {
     namespace: kind === "Node" ? undefined : meta.namespace,
     name: meta.name ?? "",
   };
-  return { ref, kind, label: meta.name ?? "?", sub, tone, creationTimestamp: meta.creationTimestamp };
+  return { ref, kind, label: meta.name ?? "?", sub, version: imageVer, tone, creationTimestamp: meta.creationTimestamp };
+}
+
+// imageTag extracts the human-facing version from a container image ref,
+// returned with a leading ":" so it reads like `:v0.3.1` on the card:
+//   repo/app:v0.3.1        → ":v0.3.1"
+//   registry:5000/app:1.25 → ":1.25"   (a registry port is not the tag)
+//   app@sha256:abcdef…     → ":sha256:abcdef…" (trimmed)
+//   nginx                  → ":latest" (implicit default)
+function imageTag(image: string): string {
+  if (!image) return "";
+  const at = image.indexOf("@");
+  const ref = at >= 0 ? image.slice(0, at) : image;
+  const lastSlash = ref.lastIndexOf("/");
+  const lastColon = ref.lastIndexOf(":");
+  if (lastColon > lastSlash && lastColon >= 0) return ":" + ref.slice(lastColon + 1);
+  if (at >= 0) {
+    const dig = image.slice(at + 1);
+    return ":" + (dig.length > 19 ? dig.slice(0, 19) + "…" : dig);
+  }
+  return ":latest";
 }
 
 function ownerNode(owner: any, namespace?: string): Node {
