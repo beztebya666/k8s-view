@@ -33,6 +33,7 @@ import { NetworkPolicyGraph } from "../components/detail/NetworkPolicyGraph";
 import { TopologyGraph } from "../components/detail/TopologyGraph";
 import { FileSearch } from "lucide-react";
 import { WorkloadMetrics } from "../components/charts/WorkloadMetrics";
+import { NodeMetrics } from "../components/charts/NodeMetrics";
 import {
   getSnapshot as favSnapshotRef,
   isPinned as favIsPinned,
@@ -1527,6 +1528,14 @@ function SummaryTab({ obj }: { obj: any }) {
         <Section title="Metrics" collapsible defaultOpen>
           <div className="p-3">
             <WorkloadMetrics obj={obj} />
+          </div>
+        </Section>
+      )}
+
+      {obj.kind === "Node" && (
+        <Section title="Metrics" collapsible defaultOpen>
+          <div className="p-3">
+            <NodeMetrics obj={obj} />
           </div>
         </Section>
       )}

@@ -22,6 +22,10 @@ type Config struct {
 	ResyncSeconds      int
 	DefaultClusterName string
 
+	// Open the dashboard in the default browser on startup. Defaults to on
+	// for local runs and off in-cluster (a pod has no browser).
+	Open bool
+
 	// Distributed mode (optional)
 	Mode      string // "all-in-one" | "api" | "worker"
 	RedisAddr string
@@ -48,6 +52,8 @@ func FromFlags() *Config {
 		"informer resync period in seconds (0 disables periodic resync — only deltas are sent)")
 	flag.StringVar(&c.DefaultClusterName, "default-cluster", envOr("K8SVIEW_DEFAULT_CLUSTER", ""),
 		"name of the cluster to select on first load (default: current-context)")
+	flag.BoolVar(&c.Open, "open", envBool("K8SVIEW_OPEN", !inClusterDetect()),
+		"open the dashboard in the default browser on startup (on for local runs, off in-cluster)")
 	flag.StringVar(&c.Mode, "mode", envOr("K8SVIEW_MODE", "all-in-one"),
 		"deployment mode: all-in-one | api | worker")
 	flag.StringVar(&c.RedisAddr, "redis", envOr("K8SVIEW_REDIS", ""),

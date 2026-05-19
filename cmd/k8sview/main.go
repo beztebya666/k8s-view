@@ -9,9 +9,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -83,18 +87,36 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:              cfg.ListenAddr,
 		Handler:           router,
 		ReadHeaderTimeout: 15 * time.Second,
 		// No write timeout: WebSocket and log/exec streams are long-lived.
 	}
 
+	// Bind explicitly so a busy port (a tester may already have something on
+	// :8080) falls back to a free one instead of killing the process. We hold
+	// the listener before Serve(), so an auto-opened browser lands in the
+	// accept backlog even if it races startup.
+	ln, err := listen(cfg.ListenAddr, logger)
+	if err != nil {
+		logger.Fatal("failed to bind listen address", zap.String("addr", cfg.ListenAddr), zap.Error(err))
+	}
+	url := browseURL(ln)
+
 	go func() {
-		logger.Info("listening", zap.String("addr", cfg.ListenAddr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Info("listening", zap.String("addr", ln.Addr().String()), zap.String("url", url))
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("http server failed", zap.Error(err))
 		}
 	}()
+
+	if cfg.Open && url != "" {
+		if err := openBrowser(url); err != nil {
+			logger.Warn("could not open the browser automatically — open this URL yourself",
+				zap.String("url", url), zap.Error(err))
+		} else {
+			logger.Info("opened the dashboard in your default browser", zap.String("url", url))
+		}
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -141,6 +163,57 @@ func loadLDAPConfig() auth.LDAPConfig {
 		GroupFilter:     os.Getenv("K8SVIEW_LDAP_GROUP_FILTER"),
 		AdminGroupDN:    os.Getenv("K8SVIEW_LDAP_ADMIN_GROUP_DN"),
 		StartTLS:        os.Getenv("K8SVIEW_LDAP_STARTTLS") == "true",
+	}
+}
+
+// listen binds addr, or — when that fails, most often because the port is
+// already taken — falls back to an OS-assigned free port on the same host so
+// the binary still comes up instead of exiting.
+func listen(addr string, logger *zap.Logger) (net.Listener, error) {
+	ln, err := net.Listen("tcp", addr)
+	if err == nil {
+		return ln, nil
+	}
+	host, _, splitErr := net.SplitHostPort(addr)
+	if splitErr != nil {
+		host = ""
+	}
+	fallback, ferr := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if ferr != nil {
+		return nil, err // surface the original failure, not the fallback's
+	}
+	logger.Warn("requested address is unavailable — using a free port instead",
+		zap.String("requested", addr),
+		zap.String("using", fallback.Addr().String()),
+		zap.Error(err),
+	)
+	return fallback, nil
+}
+
+// browseURL turns a bound listener into the URL a human should open. An
+// unspecified or loopback bind address is reported as localhost.
+func browseURL(ln net.Listener) string {
+	tcp, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		return ""
+	}
+	host := "localhost"
+	if tcp.IP != nil && !tcp.IP.IsUnspecified() && !tcp.IP.IsLoopback() {
+		host = tcp.IP.String()
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(tcp.Port))
+}
+
+// openBrowser launches the OS default browser at url. Non-fatal by design:
+// on a headless host the caller just logs the URL instead.
+func openBrowser(url string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+	case "darwin":
+		return exec.Command("open", url).Start()
+	default:
+		return exec.Command("xdg-open", url).Start()
 	}
 }
 

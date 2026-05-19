@@ -20,3 +20,6 @@ internal/web/dist/*
 .codex/
 .claude/
 memory/
+
+# tsc incremental build cache
+frontend/tsconfig.tsbuildinfo
