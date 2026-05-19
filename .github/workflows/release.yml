@@ -85,16 +85,21 @@ jobs:
         with:
           username: beztebya666
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Re-tag :beta → :version + :latest (no rebuild)
+      - name: Re-tag :beta → :version, then :latest (ordered, no rebuild)
         run: |
           v="${{ needs.prep.outputs.version }}"
           src="${GHCR_IMAGE}:beta"
-          # imagetools copies the whole multi-arch manifest by digest.
-          docker buildx imagetools create \
-            -t "${GHCR_IMAGE}:${v}" -t "${GHCR_IMAGE}:latest" "${src}"
+          # Separate ops, :version before :latest, so both land with newer
+          # timestamps than the (older, untouched) :beta and :latest ends up
+          # on top of the registry tag list. imagetools copies the whole
+          # multi-arch manifest by digest — no rebuild.
+          docker buildx imagetools create -t "${GHCR_IMAGE}:${v}" "${src}"
           if [ "${HAS_DOCKERHUB}" = "true" ]; then
-            docker buildx imagetools create \
-              -t "${DOCKERHUB_IMAGE}:${v}" -t "${DOCKERHUB_IMAGE}:latest" "${src}"
+            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:${v}" "${src}"
+          fi
+          docker buildx imagetools create -t "${GHCR_IMAGE}:latest" "${src}"
+          if [ "${HAS_DOCKERHUB}" = "true" ]; then
+            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:latest" "${src}"
           fi
           echo "Promoted ${src} → ${v} + latest"
           docker buildx imagetools inspect "${GHCR_IMAGE}:${v}" | head -20
@@ -124,16 +129,17 @@ jobs:
         with:
           username: beztebya666
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Compute tags
+      - name: Compute :beta tag
         id: tags
         run: |
-          v="${{ needs.prep.outputs.version }}"
-          tags="${GHCR_IMAGE}:${v},${GHCR_IMAGE}:latest"
+          tags="${GHCR_IMAGE}:beta"
           if [ "${HAS_DOCKERHUB}" = "true" ]; then
-            tags="${tags},${DOCKERHUB_IMAGE}:${v},${DOCKERHUB_IMAGE}:latest"
+            tags="${tags},${DOCKERHUB_IMAGE}:beta"
           fi
           echo "tags=${tags}" >> "$GITHUB_OUTPUT"
-      - name: Build & push (amd64 + arm64)
+      - name: Build & push :beta first (amd64 + arm64)
+        # Push :beta first; the release tags are re-tagged off it below so
+        # they land newer and sort above :beta in the registry tag list.
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -145,6 +151,18 @@ jobs:
             COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Re-tag :beta → :version, then :latest (ordered)
+        run: |
+          v="${{ needs.prep.outputs.version }}"
+          src="${GHCR_IMAGE}:beta"
+          docker buildx imagetools create -t "${GHCR_IMAGE}:${v}" "${src}"
+          if [ "${HAS_DOCKERHUB}" = "true" ]; then
+            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:${v}" "${src}"
+          fi
+          docker buildx imagetools create -t "${GHCR_IMAGE}:latest" "${src}"
+          if [ "${HAS_DOCKERHUB}" = "true" ]; then
+            docker buildx imagetools create -t "${DOCKERHUB_IMAGE}:latest" "${src}"
+          fi
 
   # Build the SPA exactly once and hand the embed-ready dist to every binary.
   frontend:

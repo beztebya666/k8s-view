@@ -44,9 +44,15 @@ jobs:
           go build ./...
 
   beta-image:
-    # Only from main (not PRs / forks) — publishes the rolling beta tag.
+    # Only from main (not PRs / forks) — publishes the rolling :beta tag.
+    # Skipped on release commits ("Release vX.Y.Z"): release.yml then owns
+    # every image push and pushes :beta itself first, so :vX.Y.Z and :latest
+    # land with newer timestamps and sort above :beta in the registry list.
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push'
+      && github.ref == 'refs/heads/main'
+      && !startsWith(github.event.head_commit.message, 'Release ')
     runs-on: ubuntu-latest
     env:
       HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_TOKEN != '' }}
