@@ -9,8 +9,8 @@ description: |
 type: application
 # Chart version is bumped on every chart change.
 # appVersion tracks the binary release.
-version: 0.4.1
-appVersion: "v0.4.1"
+version: 0.4.2
+appVersion: "v0.4.2"
 kubeVersion: ">=1.20.0-0"
 home: https://github.com/beztebya666/k8s-view
 sources:
@@ -41,17 +41,17 @@ annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
-    - kind: added
-      description: Force delete (--force --grace-period=0) beside every Delete — row kebab, bulk selection, and the detail-panel header
-    - kind: added
-      description: Node detail page metrics — CPU / Memory / Disk charts with Prometheus and metrics-server fallback
-    - kind: added
-      description: Topology — Pod cards now show the running container image tag; larger cards and wider columns
-    - kind: added
-      description: Auto-open the dashboard in the browser on startup, with a graceful fallback when the port is busy
-    - kind: added
-      description: Multi-arch CI/CD — rolling :beta from main, tag/dispatch releases with amd64+arm64 images and Linux/macOS/Windows binaries
     - kind: fixed
-      description: WebSocket close-duration was logged as ~0 (time.Since evaluated at connect, not close)
+      description: Log viewer — Follow no longer breaks when Wrap or Pretty JSON is enabled; the tail stays pinned as variable-height rows are measured
+    - kind: added
+      description: Pretty JSON expands embedded JSON — a string value that is itself a JSON object/array is broken out inline into real indented fields
+    - kind: changed
+      description: Cluster icon editor — one unified picker for the custom photo and emoji presets; both stay on file and can be flipped between without re-uploading
     - kind: fixed
-      description: YAML editor — Save no longer fails with SSA "duplicate entries for key" errors (full-document saves now use Update/PUT like kubectl-edit and Lens; partial-field patches keep using server-side apply). The error banner is dismissible (× button) and auto-clears after 5 s.
+      description: Clicking a hue swatch or icon tile in the cluster icon editor no longer toggles the sidebar cluster section open/closed
+    - kind: changed
+      description: Confirm/alert/prompt modal widened; the bulk-delete dialog lists the full selection in a box that scrolls both axes
+    - kind: changed
+      description: The Create (+) button is painted with the cluster's own colour; the multi-select action bar moved to bottom-centre so it never overlaps it
+    - kind: removed
+      description: All blur / backdrop-blur effects, replaced with opacity-based darkening — no GPU dependency

@@ -16,10 +16,10 @@ point it at a kubeconfig, and you're done.
 
 | | |
 |---|---|
-| **Latest release** | `v0.4.1` |
+| **Latest release** | `v0.4.2` |
 | **License** | Apache-2.0 |
-| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.4.1` |
-| **Docker Hub image** | `beztebya666/k8s-view:v0.4.1` |
+| **GHCR image** | `ghcr.io/beztebya666/k8s-view:v0.4.2` |
+| **Docker Hub image** | `beztebya666/k8s-view:v0.4.2` |
 | **Build** | Go 1.22 + Node 20 |
 | **Compatible with** | Kubernetes 1.20 → 1.36 (`client-go` v0.31, dynamic discovery) |
 
@@ -202,10 +202,10 @@ you. Both carry the same digest.
 
 ```bash
 # GitHub Container Registry
-docker pull ghcr.io/beztebya666/k8s-view:v0.4.1
+docker pull ghcr.io/beztebya666/k8s-view:v0.4.2
 
 # Docker Hub
-docker pull beztebya666/k8s-view:v0.4.1
+docker pull beztebya666/k8s-view:v0.4.2
 ```
 
 `:latest` is also available on both and tracks the newest release.
@@ -218,7 +218,7 @@ docker run --rm -it \
   --network host \
   --security-opt label=disable \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
-  ghcr.io/beztebya666/k8s-view:v0.4.1
+  ghcr.io/beztebya666/k8s-view:v0.4.2
 ```
 
 For a kubeconfig that points at a routable API server, bridge networking
@@ -228,7 +228,7 @@ with a port publish is fine:
 docker run --rm -it \
   -v ${HOME}/.kube/config:/home/app/.kube/config:ro \
   -p 8080:8080 \
-  ghcr.io/beztebya666/k8s-view:v0.4.1
+  ghcr.io/beztebya666/k8s-view:v0.4.2
 ```
 
 `make docker-run` wraps the host-network form for local development.
@@ -499,9 +499,9 @@ make clean          # rm bin/ + frontend dist
 The version baked into the binary is set at build time:
 
 ```bash
-make build VERSION=v0.4.1
+make build VERSION=v0.4.2
 ./bin/k8s-view --help        # the help banner reflects the build version
-curl -s :8080/api/v1/version # {"version":"0.4.1","commit":"<short-sha>"}
+curl -s :8080/api/v1/version # {"version":"0.4.2","commit":"<short-sha>"}
 ```
 
 ---
