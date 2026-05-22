@@ -407,6 +407,13 @@ export function PodLogsPage(props: {
     });
   }, [cancelAutoScroll]);
 
+  // `totalSize` is the virtualiser's measured content height. In dynamic-row
+  // mode (Wrap / Pretty JSON) each row is measured *after* render, so this
+  // value keeps growing for a few frames after a new line lands — which is
+  // exactly why Follow looked broken with those toggles: the scroll below
+  // ran once, against a stale estimate-based height. Depending on it here
+  // re-runs the follow scroll until the measured height settles.
+  const totalSize = v.getTotalSize();
   useLayoutEffect(() => {
     const el = containerRef.current;
     const prevLength = prevFilteredLengthRef.current;
@@ -424,7 +431,10 @@ export function PodLogsPage(props: {
 
     cancelAutoScroll();
 
-    if (added > 80 || distance > el.clientHeight * 0.8) {
+    // Hard-pin (no animation) for dynamic rows: this effect re-fires as the
+    // measured height settles, and animating each re-fire would stutter.
+    // A big jump in fixed mode also snaps rather than crawls.
+    if (dynamicRows || added > 80 || distance > el.clientHeight * 0.8) {
       autoScrollingRef.current = true;
       el.scrollTop = target;
       autoScrollFrameRef.current = requestAnimationFrame(() => {
@@ -455,7 +465,7 @@ export function PodLogsPage(props: {
       setAtPresent(near);
     };
     autoScrollFrameRef.current = requestAnimationFrame(tick);
-  }, [filtered.length, cancelAutoScroll]);
+  }, [filtered.length, totalSize, dynamicRows, cancelAutoScroll]);
 
   const downloadFor = (opt: DownloadPick) => {
     // "visible" downloads what the user actually sees (post-search-filter),

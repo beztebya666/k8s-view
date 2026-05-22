@@ -81,13 +81,13 @@
     z-index: 1200;
     transform: translateX(-50%);
     width: max-content;
-    max-width: min(320px, 70vw);
+    max-width: min(480px, 80vw);
     border: 1px solid rgb(var(--line));
     border-radius: 6px;
     background: rgb(var(--bg-soft) / 0.98);
     color: rgb(var(--fg-soft));
     box-shadow: 0 12px 28px rgb(0 0 0 / 0.45);
-    padding: 6px 8px;
+    padding: 8px 10px;
     text-align: left;
     text-transform: none;
     letter-spacing: 0;
@@ -303,4 +303,23 @@
     box-shadow: 0 0 0 2px rgb(var(--bg-soft));
     cursor: grab;
   }
+}
+
+/* Thin scrollbar for tooltip / modal rows (container hover-card image /
+   id / name, bulk-delete resource list) — the default chunky bar looks
+   wrong inside a small card. Thin on both axes. */
+.kv-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line)) transparent;
+}
+.kv-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.kv-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.kv-scroll::-webkit-scrollbar-thumb {
+  background: rgb(var(--line));
+  border-radius: 3px;
 }

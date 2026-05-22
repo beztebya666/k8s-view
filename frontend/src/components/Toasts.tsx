@@ -36,7 +36,7 @@ export function Toasts() {
         <div className="self-end pointer-events-auto">
           <button
             type="button"
-            className="text-[10px] uppercase tracking-wide text-fg-mute hover:text-fg bg-bg-soft/80 backdrop-blur-sm border border-line/60 rounded px-2 py-1"
+            className="text-[10px] uppercase tracking-wide text-fg-mute hover:text-fg bg-bg-soft border border-line/60 rounded px-2 py-1"
             onClick={() => clearAll()}
             title="Dismiss all notifications"
           >
@@ -58,7 +58,7 @@ function ToastCard({ toast }: { toast: Toast }) {
     <div
       role="status"
       className={clsx(
-        "pointer-events-auto toast-in flex items-start gap-2 rounded-md border px-3 py-2 backdrop-blur-sm shadow-[0_18px_44px_rgb(0_0_0/0.45)]",
+        "pointer-events-auto toast-in flex items-start gap-2 rounded-md border px-3 py-2 shadow-[0_18px_44px_rgb(0_0_0/0.45)]",
         TONE_CLS[toast.tone],
       )}
     >

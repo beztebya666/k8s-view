@@ -146,7 +146,7 @@ export function AddClusterModal({ onClose, onImported }: Props) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[1100] grid place-items-center bg-black/55 backdrop-blur-sm"
+      className="fixed inset-0 z-[1100] grid place-items-center bg-black/65"
       onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}
     >
       <div

@@ -8,8 +8,9 @@
 //     (`bg-bg-soft` + `border-line` + `text-fg-soft`) so it reads well in
 //     both dark and light themes. Cluster identity is conveyed by a small
 //     dot, not a bright background.
-//   * The button uses the `accent` token (already theme-aware) instead of a
-//     hard-coded blue, so it tones down in light mode automatically.
+//   * The button is painted with the cluster's own colour (`useClusterColor`)
+//     — the very hue the user picked for that cluster's top-tab / sidebar dot
+//     — so the "+" always reads as "this cluster", not a fixed global accent.
 
 import { useState } from "react";
 import { Plus } from "lucide-react";
@@ -43,7 +44,8 @@ export function CreateFab({ templateGvr }: { templateGvr?: string }) {
       )}
       <button
         type="button"
-        className="h-11 w-11 rounded-full grid place-items-center bg-accent/95 text-white shadow-[0_6px_16px_rgb(0_0_0/0.32)] hover:bg-accent active:scale-95 transition-transform"
+        className="h-11 w-11 rounded-full grid place-items-center text-white shadow-[0_6px_16px_rgb(0_0_0/0.32)] hover:brightness-110 active:scale-95 transition-[transform,filter]"
+        style={{ background: tint.hsl }}
         title={`Create resource in ${cluster}`}
         aria-label={`Create resource in ${cluster}`}
         onClick={() => bottom.push({ action: "create", cluster, gvr: templateGvr })}

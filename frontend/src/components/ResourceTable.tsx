@@ -649,7 +649,10 @@ export function ResourceTable(props: ResourceTableProps) {
         document.body,
       )}
       {selectedItems.length > 0 && (
-        <div className="absolute right-4 bottom-4 z-20 flex items-center gap-2 rounded-md border border-line bg-bg-soft/95 px-2 py-2 shadow-[0_18px_48px_rgb(0_0_0/0.55)] backdrop-blur">
+        // Bottom-CENTRE, not bottom-right: the bottom-right corner belongs to
+        // the CreateFab ("+"). A centred selection bar is the standard
+        // multi-select pattern and never collides with the corner FAB.
+        <div className="absolute left-1/2 -translate-x-1/2 bottom-5 z-20 flex items-center gap-2 rounded-md border border-line bg-bg-soft px-2 py-2 shadow-[0_18px_48px_rgb(0_0_0/0.55)]">
           <span className="px-2 text-xs text-fg-soft">{selectedItems.length.toLocaleString()} selected</span>
           {(bulkActions ?? []).map((action) => {
             const Icon = action.icon;

@@ -35,11 +35,28 @@ export type EventIndex = {
 
 const EMPTY_INDEX: EventIndex = { byUid: new Map(), byKey: new Map() };
 
-// 1 h matches the kube-apiserver default `--event-ttl`. We could trust the
-// store to evict for us, but a stale event left in the local cache would
-// keep flagging a row long after the underlying issue cleared, so we
-// explicitly cap the recency window here.
-const RECENT_WINDOW_MS = 60 * 60 * 1000;
+// Recency windows for keeping a warning visible. The kube-apiserver event
+// TTL is 1 h, but a probe failure that fired 11 min ago and never repeated
+// is *not* a current issue — kubelet would have re-emitted it if it still
+// was. Showing it leaves a row falsely "broken" long after recovery, so
+// we cap the visible window much tighter than the cluster TTL:
+//
+//   non-severe events    — 5 min (Unhealthy probe, FailedMount, BackOff
+//                          before it escalates, etc.). If the kubelet
+//                          didn't fire a new copy in 5 min, the issue is
+//                          gone for the user's purposes.
+//
+//   severe events        — 30 min. CrashLoopBackOff, OOMKilled,
+//                          ImagePullBackOff and friends back off
+//                          exponentially up to ~5 min between retries, so
+//                          a tighter window would flicker on healthy
+//                          backoff cycles. Capped so an old kill from
+//                          earlier in the hour doesn't sit on the row.
+//
+// History of past failures stays available on the detail page's Events
+// tab — the row badge is purely "is this thing in trouble right now?".
+const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+const SEVERE_WINDOW_MS = 30 * 60 * 1000;
 
 // Minimum interval between full index rebuilds. Warning badges are
 // effectively a UX hint — sub-second freshness isn't useful, and rebuilding
@@ -74,10 +91,13 @@ export function useEventIndex(cluster: string, enabled: boolean): EventIndex {
       // v1) → creationTimestamp. The first non-empty one wins.
       const tsStr = ev.lastTimestamp ?? ev.eventTime ?? ev.metadata?.creationTimestamp;
       const last = tsStr ? new Date(tsStr).getTime() : 0;
-      if (!Number.isFinite(last) || now - last > RECENT_WINDOW_MS) continue;
+      if (!Number.isFinite(last)) continue;
+      const reason = String(ev.reason ?? "Warning");
+      const window = isSevereReason(reason) ? SEVERE_WINDOW_MS : ACTIVE_WINDOW_MS;
+      if (now - last > window) continue;
       const obj = ev.involvedObject ?? {};
       const summary: EventWarning = {
-        reason: String(ev.reason ?? "Warning"),
+        reason,
         message: String(ev.message ?? "").trim(),
         count: Number(ev.count ?? 1),
         lastSeen: last,

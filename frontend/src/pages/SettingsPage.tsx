@@ -11,7 +11,7 @@ import {
   useApp,
 } from "../stores/app";
 import { useClusterColor } from "../lib/clusterColor";
-import { IconEditorBody } from "../components/IconEditor";
+import { IconEditorBody, resolveClusterIcon } from "../components/IconEditor";
 import { triggerClockProbe, useClockSnapshot } from "../lib/clock";
 import { notify_ } from "../lib/notifications";
 import { copyToClipboard } from "../lib/clipboard";
@@ -817,16 +817,16 @@ function ClusterAvatar({ cluster }: { cluster: string }) {
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }, [display]);
 
-  if (settings.iconImage) {
-    return <img src={settings.iconImage} alt="" className="h-12 w-12 rounded object-cover shrink-0" />;
+  const icon = resolveClusterIcon(settings);
+  if (icon.kind === "image") {
+    return <img src={icon.src} alt="" className="h-12 w-12 rounded object-cover shrink-0" />;
   }
-  const label = settings.iconLabel.trim();
   return (
     <div
       className="h-12 w-12 rounded flex items-center justify-center text-sm font-semibold shrink-0"
       style={{ background: tint.hsl, color: "rgb(var(--bg))" }}
     >
-      {label ? label.slice(0, 3) : initials}
+      {icon.kind === "label" ? icon.text.slice(0, 3) : initials}
     </div>
   );
 }
@@ -887,7 +887,10 @@ function ClusterIconControl({ cluster }: { cluster: string }) {
         <div
           className="fixed z-[1000] rounded-md border border-line bg-bg-soft shadow-[0_18px_48px_rgb(0_0_0/0.55)] p-3"
           style={{ left: pos.left, top: pos.top }}
+          // Portaled to <body>, but React bubbles events through the
+          // component tree — keep swatch / tile clicks from escaping.
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
           <IconEditorBody name={cluster} />
         </div>,

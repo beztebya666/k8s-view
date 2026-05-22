@@ -685,7 +685,10 @@ async function deleteResource(cluster: string, gvr: string, it: Item, force = fa
 async function deleteResources(cluster: string, gvr: string, items: Item[], force = false) {
   if (items.length === 0) return false;
   const kind = items[0]?.kind ?? prettyKind(gvr);
-  const sample = items.slice(0, 8);
+  // List the full selection — the box scrolls (vertical + horizontal) rather
+  // than hiding rows behind "…and N more". A high cap stays as a DOM-safety
+  // net for pathological selections (the row count would freeze the modal).
+  const sample = items.slice(0, 1000);
   const hidden = items.length - sample.length;
   const ok = await modals.confirm({
     title: `${force ? "Force delete" : "Delete"} ${items.length} selected ${kind}${items.length === 1 ? "" : "s"}?`,
@@ -696,13 +699,13 @@ async function deleteResources(cluster: string, gvr: string, items: Item[], forc
             ? "Force delete skips graceful termination (--force --grace-period=0) for every item below — removed from the API server immediately, may leave orphaned processes. Cannot be undone."
             : "This action cannot be undone."}
         </div>
-        <div className="max-h-40 overflow-auto rounded-md border border-line bg-bg px-2 py-1 font-mono text-xs">
+        <div className="kv-scroll max-h-48 overflow-auto rounded-md border border-line bg-bg px-2 py-1 font-mono text-xs">
           {sample.map((it) => (
-            <div key={it.metadata.uid ?? `${it.metadata.namespace}/${it.metadata.name}`} className="truncate">
+            <div key={it.metadata.uid ?? `${it.metadata.namespace}/${it.metadata.name}`} className="whitespace-nowrap">
               {it.metadata.namespace ? `${it.metadata.namespace}/` : ""}{it.metadata.name}
             </div>
           ))}
-          {hidden > 0 && <div className="text-fg-mute">...and {hidden} more</div>}
+          {hidden > 0 && <div className="whitespace-nowrap text-fg-mute">...and {hidden} more</div>}
         </div>
       </div>
     ),

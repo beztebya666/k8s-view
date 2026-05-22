@@ -259,7 +259,7 @@ export function CommandPalette() {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[1000] bg-black/40 backdrop-blur-[1px] flex items-start justify-center pt-[12vh]"
+      className="fixed inset-0 z-[1000] bg-black/60 flex items-start justify-center pt-[12vh]"
       onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}
       role="dialog"
       aria-modal="true"

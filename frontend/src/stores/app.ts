@@ -39,6 +39,11 @@ export type ClusterSettings = {
   /** Uploaded avatar as a downscaled data-URL (≤96px, persisted in
    *  localStorage). Empty ⇒ fall back to iconLabel / initials. */
   iconImage: string;
+  /** Which icon source is actually shown — lets the user keep BOTH an
+   *  uploaded photo and an emoji/initials on file and flip between them
+   *  without re-uploading. Absent on legacy settings ⇒ image-first (the
+   *  original "uploaded photo always wins" behaviour). */
+  iconKind?: "label" | "image";
   /** Free-text environment tag ("PROD", "staging", …). Empty ⇒ no badge.
    *  Shown anywhere the cluster surfaces — picker, tabs — so a prod
    *  cluster is impossible to mistake for a sandbox. */

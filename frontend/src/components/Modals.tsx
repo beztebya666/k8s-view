@@ -222,14 +222,14 @@ function ModalHost({ pending, onResolved }: { pending: Pending; onResolved: () =
 
   return (
     <div
-      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/60 backdrop-blur-[2px] p-4"
+      className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/70 p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
       role="dialog"
       aria-modal="true"
       aria-label={pending.title}
     >
       <div
-        className="w-full max-w-[440px] rounded-md border border-line bg-bg-soft shadow-[0_24px_64px_rgb(0_0_0/0.55)] flex flex-col"
+        className="w-full max-w-[560px] rounded-md border border-line bg-bg-soft shadow-[0_24px_64px_rgb(0_0_0/0.55)] flex flex-col"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <header className="flex items-start gap-3 px-5 pt-5 pb-3">

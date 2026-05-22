@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import clsx from "clsx";
 import { useClusterColor } from "../lib/clusterColor";
 import { useApp } from "../stores/app";
-import { IconEditorBody } from "./IconEditor";
+import { IconEditorBody, resolveClusterIcon } from "./IconEditor";
 
 interface Props {
   name: string;
@@ -28,8 +28,8 @@ interface Props {
 export function ClusterBadge({ name, size = 14, editable = true, className, filled = true, title }: Props) {
   const settings = useApp((s) => s.getClusterSettings(name));
   const tint = useClusterColor(name);
-  const label = settings.iconLabel.trim();
-  const image = settings.iconImage;
+  const icon = resolveClusterIcon(settings);
+  const isImage = icon.kind === "image";
   const fontSize = Math.max(8, Math.floor(size * 0.55));
 
   const [open, setOpen] = useState(false);
@@ -67,24 +67,29 @@ export function ClusterBadge({ name, size = 14, editable = true, className, fill
         style={{
           width: size,
           height: size,
-          background: image ? "transparent" : filled ? tint.hsl : "transparent",
-          border: !image && filled ? "none" : `1px solid ${tint.hsl}`,
+          background: isImage ? "transparent" : filled ? tint.hsl : "transparent",
+          border: !isImage && filled ? "none" : `1px solid ${tint.hsl}`,
           color: filled ? "rgb(var(--bg))" : tint.hsl,
           fontSize,
           fontWeight: 600,
         }}
       >
-        {image
-          ? <img src={image} alt="" className="h-full w-full object-cover" />
-          : label
-            ? <span>{label.slice(0, 3)}</span>
+        {icon.kind === "image"
+          ? <img src={icon.src} alt="" className="h-full w-full object-cover" />
+          : icon.kind === "label"
+            ? <span>{icon.text.slice(0, 3)}</span>
             : null}
       </button>
       {open && pos && createPortal(
         <div
           className="fixed z-[1000] rounded-md border border-line bg-bg-soft shadow-[0_18px_48px_rgb(0_0_0/0.55)] p-3"
           style={{ left: pos.left, top: pos.top }}
+          // The popover is portaled to <body>, but React still bubbles its
+          // events through the component tree — i.e. into the sidebar's
+          // cluster-row <button>. Without this, clicking a hue swatch or an
+          // icon tile would also toggle the cluster section open/closed.
           onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
         >
           <IconEditorBody name={name} />
           <div className="mt-2 flex justify-end">

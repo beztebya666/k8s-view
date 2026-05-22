@@ -282,7 +282,7 @@ function HoverTooltip({
   return (
     <div
       ref={ref}
-      className="absolute z-10 pointer-events-none rounded-md border border-line bg-bg-soft/95 backdrop-blur-sm px-2 py-1 text-[11px] shadow-[0_4px_14px_rgba(0,0,0,0.35)] whitespace-nowrap"
+      className="absolute z-10 pointer-events-none rounded-md border border-line bg-bg-soft px-2 py-1 text-[11px] shadow-[0_4px_14px_rgba(0,0,0,0.35)] whitespace-nowrap"
       style={{ left: pos.left, top: pos.top }}
     >
       <div className="text-fg-mute">{formatHoverTime(t)}</div>

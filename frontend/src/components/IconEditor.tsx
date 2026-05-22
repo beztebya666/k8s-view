@@ -1,14 +1,19 @@
-// IconEditor — the shared cluster-icon customiser body: uploaded photo,
-// emoji/initials presets, and hue. Rendered inside a popover by both the
-// sidebar ClusterBadge and the Settings page "⋮" button so there's one
-// editor, one behaviour, everywhere.
+// IconEditor — the shared cluster-icon customiser body: an uploaded photo
+// and emoji/initials presets sit in ONE picker grid, plus a hue row.
+// Rendered inside a popover by both the sidebar ClusterBadge and the
+// Settings page "⋮" button so there's one editor, one behaviour, everywhere.
+//
+// The custom photo is just another tile in the icon grid — click it to show
+// the photo, click an emoji to show that emoji. Both stay on file, so
+// flipping back and forth never loses the upload. `resolveClusterIcon`
+// below is the single source of truth every render site uses.
 
 import { useRef, useState } from "react";
 import clsx from "clsx";
 import { Upload, Trash2 } from "lucide-react";
 import { clusterColor } from "../lib/clusterColor";
 import { downscaleImage } from "../lib/imageScale";
-import { useApp } from "../stores/app";
+import { useApp, type ClusterSettings } from "../stores/app";
 import { notify_ } from "../lib/notifications";
 
 export const HUE_PRESETS = [
@@ -22,18 +27,44 @@ export const HUE_PRESETS = [
 // A handful of presets so "give it an avatar" is one click, no typing.
 const EMOJI_PRESETS = ["🚀", "🔥", "⭐", "🛡️", "⚙️", "🌐", "🐳", "📦", "🧪", "💾", "🟢", "🔴"];
 
+export type ClusterIcon =
+  | { kind: "image"; src: string }
+  | { kind: "label"; text: string }
+  | { kind: "none" };
+
+/** Decide which icon source a cluster actually renders. An explicit
+ *  `iconKind` wins (with a graceful fallback when the chosen source is
+ *  empty); legacy settings with no `iconKind` keep the original
+ *  image-takes-precedence behaviour. The one place this logic lives — every
+ *  badge / avatar render site calls it. */
+export function resolveClusterIcon(
+  s: Pick<ClusterSettings, "iconImage" | "iconLabel" | "iconKind">,
+): ClusterIcon {
+  const text = s.iconLabel.trim();
+  const image: ClusterIcon = s.iconImage ? { kind: "image", src: s.iconImage } : { kind: "none" };
+  const label: ClusterIcon = text ? { kind: "label", text } : { kind: "none" };
+  if (s.iconKind === "label") return label.kind !== "none" ? label : image;
+  if (s.iconKind === "image") return image.kind !== "none" ? image : label;
+  // Legacy / unset — uploaded photo first, exactly as before.
+  return image.kind !== "none" ? image : label;
+}
+
 export function IconEditorBody({ name }: { name: string }) {
   const settings = useApp((s) => s.getClusterSettings(name));
   const setClusterSettings = useApp((s) => s.setClusterSettings);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const icon = resolveClusterIcon(settings);
+  const hasImage = !!settings.iconImage;
+
   const onPickFile = async (file: File | undefined) => {
     if (!file) return;
     setBusy(true);
     try {
       const dataUrl = await downscaleImage(file);
-      setClusterSettings(name, { iconImage: dataUrl });
+      // Uploading is an explicit "show this" — select the image straight away.
+      setClusterSettings(name, { iconImage: dataUrl, iconKind: "image" });
     } catch (e: any) {
       notify_.bad("Could not load image", e?.message ?? String(e));
     } finally {
@@ -44,67 +75,93 @@ export function IconEditorBody({ name }: { name: string }) {
 
   return (
     <div className="w-[260px]">
-      <Section title="Image">
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => void onPickFile(e.target.files?.[0])}
-        />
-        <div className="flex items-center gap-2">
-          {settings.iconImage ? (
-            <img src={settings.iconImage} alt="" className="h-8 w-8 rounded object-cover shrink-0" />
-          ) : (
-            <div className="h-8 w-8 rounded bg-bg-mute shrink-0" />
-          )}
-          <button
-            type="button"
-            className="btn h-7 flex-1 justify-center"
-            disabled={busy}
-            onClick={() => fileRef.current?.click()}
-          >
-            <Upload size={12} />
-            {busy ? "Loading…" : settings.iconImage ? "Replace" : "Upload image"}
-          </button>
-          {settings.iconImage && (
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => void onPickFile(e.target.files?.[0])}
+      />
+
+      <Section title="Icon">
+        {/* One unified picker: the uploaded photo is the first tile, emoji
+            presets follow. Whichever is highlighted is what the badge shows. */}
+        <div className="flex flex-wrap gap-1">
+          {hasImage ? (
             <button
               type="button"
-              className="btn h-7 w-7 justify-center !px-0"
-              title="Remove image"
-              onClick={() => setClusterSettings(name, { iconImage: "" })}
+              title="Use custom image"
+              aria-label="Use custom image"
+              className={clsx(
+                "h-7 w-7 rounded-sm overflow-hidden grid place-items-center border",
+                icon.kind === "image"
+                  ? "border-fg ring-2 ring-inset ring-fg"
+                  : "border-line/60 hover:border-fg-soft",
+              )}
+              onClick={() => setClusterSettings(name, { iconKind: "image" })}
             >
-              <Trash2 size={12} />
+              <img src={settings.iconImage} alt="" className="h-full w-full object-cover" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              title="Upload a custom image"
+              aria-label="Upload a custom image"
+              disabled={busy}
+              className="h-7 w-7 rounded-sm border border-dashed border-line text-fg-mute hover:text-fg hover:border-fg-soft grid place-items-center disabled:opacity-50"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload size={12} />
             </button>
           )}
+          {EMOJI_PRESETS.map((emoji) => {
+            const active = icon.kind === "label" && settings.iconLabel === emoji;
+            return (
+              <button
+                key={emoji}
+                type="button"
+                className={clsx(
+                  "h-7 w-7 rounded-sm border text-sm grid place-items-center",
+                  active
+                    ? "border-fg bg-bg-mute"
+                    : "border-line/60 hover:border-fg-soft hover:bg-bg-mute",
+                )}
+                onClick={() => setClusterSettings(name, { iconLabel: emoji, iconKind: "label" })}
+              >
+                {emoji}
+              </button>
+            );
+          })}
         </div>
-      </Section>
-
-      <Section title="Label">
         <input
-          className="input h-7 w-full text-xs font-mono"
+          className="input mt-1.5 h-7 w-full text-xs font-mono"
           placeholder="emoji or initials (max 3)"
           value={settings.iconLabel}
           maxLength={6}
-          onChange={(e) => setClusterSettings(name, { iconLabel: e.target.value })}
+          onChange={(e) => setClusterSettings(name, { iconLabel: e.target.value, iconKind: "label" })}
         />
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {EMOJI_PRESETS.map((emoji) => (
+        {hasImage && (
+          <div className="mt-1.5 flex items-center gap-2 text-[11px]">
             <button
-              key={emoji}
               type="button"
-              className={clsx(
-                "h-7 w-7 rounded-sm border text-sm grid place-items-center",
-                settings.iconLabel === emoji
-                  ? "border-fg bg-bg-mute"
-                  : "border-line/60 hover:border-fg-soft hover:bg-bg-mute",
-              )}
-              onClick={() => setClusterSettings(name, { iconLabel: emoji })}
+              className="inline-flex items-center gap-1 text-fg-mute hover:text-fg disabled:opacity-50"
+              disabled={busy}
+              onClick={() => fileRef.current?.click()}
             >
-              {emoji}
+              <Upload size={11} />
+              {busy ? "Loading…" : "Replace image"}
             </button>
-          ))}
-        </div>
+            <span className="text-line">·</span>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 text-fg-mute hover:text-bad"
+              onClick={() => setClusterSettings(name, { iconImage: "", iconKind: "label" })}
+            >
+              <Trash2 size={11} />
+              Remove image
+            </button>
+          </div>
+        )}
       </Section>
 
       <Section title="Hue">
@@ -132,7 +189,7 @@ export function IconEditorBody({ name }: { name: string }) {
         <button
           type="button"
           className="text-[11px] text-fg-mute hover:text-fg"
-          onClick={() => setClusterSettings(name, { iconLabel: "", iconHue: -1, iconImage: "" })}
+          onClick={() => setClusterSettings(name, { iconLabel: "", iconHue: -1, iconImage: "", iconKind: "label" })}
         >
           Reset icon
         </button>

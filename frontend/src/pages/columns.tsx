@@ -2,7 +2,7 @@
 // list-view that varies between resource types; the rest of the rendering
 // (virtualization, filter, sort, actions) is shared.
 
-import { useContext, useMemo, useState } from "react";
+import { useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import clsx from "clsx";
 import { AlertTriangle } from "lucide-react";
@@ -11,7 +11,7 @@ import { AgeCell, Column, type IssueInfo } from "../components/ResourceTable";
 import { age, bytes, formatMillicores } from "../lib/format";
 import { useApp } from "../stores/app";
 import { podMetricKey, readPodMetric, usePodMetricsStore } from "../lib/podMetricsStore";
-import { podDisplayStatus, podStatusClassName } from "../lib/podStatus";
+import { containerDisplayStatus, podDisplayStatus, podStatusClassName, type PodStatusKind } from "../lib/podStatus";
 import { LinkCell, ownerToRef } from "../components/DetailPanel";
 import { EventIndexContext, eventsForItem, isSevereReason, type EventWarning } from "../lib/eventsIndex";
 import { Sparkline } from "../components/charts/Sparkline";
@@ -87,7 +87,7 @@ function IssueBadge({ info }: { info: IssueInfo }) {
     const rect = el.getBoundingClientRect();
     // Tooltip is `transform: translateX(-50%)`, so `left` is its center.
     // Clamp to keep ~halfwidth of the max-width inside the viewport.
-    const halfWidth = 168;
+    const halfWidth = 240;
     const center = rect.left + rect.width / 2;
     setPos({
       top: rect.bottom + 6,
@@ -314,27 +314,335 @@ function readyReplicas(gvr: string, it: Item): number {
   return Number(it.status?.readyReplicas ?? it.status?.availableReplicas ?? 0);
 }
 
-function podContainers(it: Item) {
-  const specs = it.spec?.containers ?? [];
-  const statuses = new Map<string, any>();
-  for (const c of it.status?.containerStatuses ?? []) {
-    statuses.set(c.name, c);
+// ContainerSlot is the unified view of a container the squares cell and
+// its hover-card render from: it merges a pod.spec.*Containers entry with
+// its matching pod.status.*Statuses row (when present) into a single
+// object that knows everything we want to surface — kind (init / main /
+// ephemeral), runtime state, restart count, the last termination if any,
+// image, IDs. Spec-only entries (no status row yet — pod still booting)
+// fall through with state="unknown" so the square still appears, just
+// muted, instead of vanishing.
+type ContainerKind = "init" | "main" | "ephemeral";
+type ContainerSlot = {
+  name: string;
+  kind: ContainerKind;
+  ready: boolean;
+  state: "running" | "waiting" | "terminated" | "unknown";
+  reason?: string;
+  message?: string;
+  exitCode?: number;
+  signal?: number;
+  startedAt?: string;
+  finishedAt?: string;
+  image?: string;
+  imageID?: string;
+  containerID?: string;
+  restartCount: number;
+  /** Previous termination (kubelet stores one). Useful when a CrashLoop
+   *  pod is currently "Waiting" — the user wants the last exit code. */
+  lastReason?: string;
+  lastExitCode?: number;
+  lastFinishedAt?: string;
+  /** Pre-computed colour/label via the shared podStatus helper so the
+   *  cell matches the detail panel's Container Cards exactly. */
+  statusKind: PodStatusKind;
+  statusLabel: string;
+};
+
+function podContainerSlots(it: Item): ContainerSlot[] {
+  const spec = it.spec ?? {};
+  const status = it.status ?? {};
+  const initSpecs: any[] = Array.isArray(spec.initContainers) ? spec.initContainers : [];
+  const mainSpecs: any[] = Array.isArray(spec.containers) ? spec.containers : [];
+  const ephSpecs: any[] = Array.isArray(spec.ephemeralContainers) ? spec.ephemeralContainers : [];
+  const initStatuses: any[] = Array.isArray(status.initContainerStatuses) ? status.initContainerStatuses : [];
+  const mainStatuses: any[] = Array.isArray(status.containerStatuses) ? status.containerStatuses : [];
+  const ephStatuses: any[] = Array.isArray(status.ephemeralContainerStatuses) ? status.ephemeralContainerStatuses : [];
+
+  const out: ContainerSlot[] = [];
+  const build = (kind: ContainerKind, specs: any[], statuses: any[]) => {
+    const byName = new Map<string, any>();
+    for (const s of statuses) if (s?.name) byName.set(s.name, s);
+    // Spec order is the canonical render order (matches how the user
+    // wrote the pod). Status entries with no spec match are appended —
+    // ephemeral containers can show up that way.
+    for (const sp of specs) {
+      out.push(buildSlot(kind, sp, byName.get(sp.name), it));
+      byName.delete(sp.name);
+    }
+    for (const st of byName.values()) {
+      out.push(buildSlot(kind, undefined, st, it));
+    }
+  };
+  build("init", initSpecs, initStatuses);
+  build("main", mainSpecs, mainStatuses);
+  build("ephemeral", ephSpecs, ephStatuses);
+  return out;
+}
+
+function buildSlot(kind: ContainerKind, spec: any, st: any, pod: Item): ContainerSlot {
+  const name: string = (st?.name ?? spec?.name ?? "?") as string;
+  const state = st?.state ?? {};
+  let stateKind: ContainerSlot["state"] = "unknown";
+  let reason: string | undefined;
+  let message: string | undefined;
+  let exitCode: number | undefined;
+  let signal: number | undefined;
+  let startedAt: string | undefined;
+  let finishedAt: string | undefined;
+  if (state.running) {
+    stateKind = "running";
+    startedAt = state.running.startedAt;
+  } else if (state.waiting) {
+    stateKind = "waiting";
+    reason = state.waiting.reason;
+    message = state.waiting.message;
+  } else if (state.terminated) {
+    stateKind = "terminated";
+    reason = state.terminated.reason;
+    message = state.terminated.message;
+    exitCode = state.terminated.exitCode;
+    signal = state.terminated.signal;
+    startedAt = state.terminated.startedAt;
+    finishedAt = state.terminated.finishedAt;
   }
-  if (specs.length > 0) {
-    return specs.map((c: any) => ({
-      name: c.name,
-      ready: !!statuses.get(c.name)?.ready,
-    }));
-  }
-  return (it.status?.containerStatuses ?? []).map((c: any) => ({
-    name: c.name,
-    ready: !!c.ready,
-  }));
+  const last = st?.lastState?.terminated;
+  // Reuse the shared podStatus helper so the cell colour and the detail
+  // panel's container card never disagree about what state we're in.
+  const display = containerDisplayStatus(pod, name);
+  return {
+    name,
+    kind,
+    ready: !!st?.ready,
+    state: stateKind,
+    reason,
+    message,
+    exitCode,
+    signal,
+    startedAt,
+    finishedAt,
+    image: spec?.image ?? st?.image,
+    imageID: st?.imageID,
+    containerID: st?.containerID,
+    restartCount: Number(st?.restartCount ?? 0),
+    lastReason: last?.reason,
+    lastExitCode: last?.exitCode,
+    lastFinishedAt: last?.finishedAt,
+    statusKind: display?.kind ?? (stateKind === "running" && !!st?.ready ? "ok" : "mute"),
+    statusLabel: display?.label ?? (reason || stateKind),
+  };
 }
 
 function restartCount(it: Item) {
   return (it.status?.containerStatuses ?? [])
     .reduce((s: number, c: any) => s + (c.restartCount ?? 0), 0);
+}
+
+// ── Containers cell ───────────────────────────────────────────────────────
+//
+// One square per spec'd container — init first (dimmed + dashed border so
+// they're visually distinct from the steady-state main ones), then main,
+// then ephemeral. The "X/Y" counter on the right intentionally counts
+// *main* containers only, matching `kubectl get pod`'s READY column.
+//
+// Hovering a square opens a Lens-style detail card via a portal — full
+// image, current state with reason/exit-code/restarts, the last
+// termination, and the container ID.
+
+function ContainerSquaresCell({ pod }: { pod: Item }) {
+  // Slots only depend on the pod's status+spec — recompute when uid or
+  // resourceVersion advance, not on every parent re-render.
+  const slots = useMemo(() => podContainerSlots(pod), [pod.metadata?.uid, pod.metadata?.resourceVersion]);
+  if (slots.length === 0) return <span className="text-fg-mute">-</span>;
+  const mains = slots.filter((s) => s.kind === "main");
+  const readyMain = mains.filter((s) => s.ready).length;
+  return (
+    <div className="flex items-center gap-1 min-w-0">
+      {slots.map((s, i) => (
+        <ContainerSquare key={`${s.kind}:${s.name}:${i}`} slot={s} />
+      ))}
+      <span className="ml-1 font-mono text-[11px] text-fg-mute">{readyMain}/{mains.length}</span>
+    </div>
+  );
+}
+
+function squareFill(kind: PodStatusKind): string {
+  switch (kind) {
+    case "ok":   return "rgb(var(--ok))";
+    case "warn": return "rgb(var(--warn))";
+    case "bad":  return "rgb(var(--bad))";
+    case "info": return "rgb(var(--info))";
+    default:     return "rgb(var(--fg-mute) / 0.55)";
+  }
+}
+
+function ContainerSquare({ slot }: { slot: ContainerSlot }) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [hover, setHover] = useState(false);
+  // Open/close are debounced so micro-jitter doesn't strobe cards across
+  // the table. The close timer is also exposed to the hover-card so the
+  // user can move their cursor onto it (e.g. to scroll a long image path)
+  // without it disappearing under them.
+  const openTimer = useRef<number | null>(null);
+  const closeTimer = useRef<number | null>(null);
+  const cancelClose = () => {
+    if (closeTimer.current) { window.clearTimeout(closeTimer.current); closeTimer.current = null; }
+  };
+  const startOpen = () => {
+    cancelClose();
+    if (openTimer.current) return;
+    openTimer.current = window.setTimeout(() => { setHover(true); openTimer.current = null; }, 120);
+  };
+  const startClose = () => {
+    if (openTimer.current) { window.clearTimeout(openTimer.current); openTimer.current = null; }
+    if (closeTimer.current) return;
+    closeTimer.current = window.setTimeout(() => { setHover(false); closeTimer.current = null; }, 150);
+  };
+  return (
+    <>
+      <span
+        ref={ref}
+        onMouseEnter={startOpen}
+        onMouseLeave={startClose}
+        className={clsx(
+          "inline-block h-2.5 w-2.5 rounded-[2px] shrink-0",
+          slot.kind === "init"
+            ? "border border-dashed border-line/80 opacity-80"
+            : "border border-line",
+        )}
+        style={{ backgroundColor: squareFill(slot.statusKind) }}
+        aria-label={`${slot.kind === "init" ? "Init container" : slot.kind === "ephemeral" ? "Ephemeral container" : "Container"} ${slot.name}: ${slot.statusLabel}`}
+      />
+      {hover && ref.current && (
+        <ContainerHoverCard
+          slot={slot}
+          anchor={ref.current}
+          onPointerEnter={cancelClose}
+          onPointerLeave={startClose}
+        />
+      )}
+    </>
+  );
+}
+
+function ContainerHoverCard({
+  slot, anchor, onPointerEnter, onPointerLeave,
+}: { slot: ContainerSlot; anchor: HTMLElement; onPointerEnter: () => void; onPointerLeave: () => void }) {
+  // Position above the square by default, flip below if there's no room.
+  // Width is fixed so a long image path can wrap inside the card rather
+  // than nudge it off-screen. The fixed-position card lives in a portal
+  // so the virtualised table doesn't clip it.
+  const [pos, setPos] = useState<{ left: number; top: number; placement: "above" | "below" }>({ left: 0, top: 0, placement: "above" });
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const r = anchor.getBoundingClientRect();
+    const w = 560;
+    const h = 240; // best-guess; we re-measure with the real height below
+    let left = Math.max(8, Math.min(window.innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+    let placement: "above" | "below" = "above";
+    let top = r.top - 8 - h;
+    if (top < 8) { placement = "below"; top = r.bottom + 8; }
+    setPos({ left, top, placement });
+  }, [anchor]);
+  // Re-measure with the real card height once mounted so the "above"
+  // placement actually sits above (not overlapping) without paint flash.
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    if (pos.placement !== "above") return;
+    const r = anchor.getBoundingClientRect();
+    const top = r.top - 8 - el.offsetHeight;
+    if (top < 8) setPos((p) => ({ ...p, top: r.bottom + 8, placement: "below" }));
+    else setPos((p) => ({ ...p, top }));
+  }, [anchor, pos.placement]);
+
+  const kindBadge = slot.kind === "init"
+    ? <span className="ml-2 text-[10px] uppercase tracking-wide text-fg-mute border border-line rounded px-1 py-px">init</span>
+    : slot.kind === "ephemeral"
+      ? <span className="ml-2 text-[10px] uppercase tracking-wide text-info border border-info/40 rounded px-1 py-px">ephemeral</span>
+      : null;
+
+  const statusToneClass =
+    slot.statusKind === "ok"   ? "text-ok" :
+    slot.statusKind === "warn" ? "text-warn" :
+    slot.statusKind === "bad"  ? "text-bad" :
+    slot.statusKind === "info" ? "text-info" : "text-fg-mute";
+
+  const stateDescription =
+    slot.state === "running"
+      ? (slot.ready ? "Running, ready" : "Running, not ready")
+      : slot.state === "waiting"
+        ? `Waiting${slot.reason ? `: ${slot.reason}` : ""}`
+        : slot.state === "terminated"
+          ? `Terminated${slot.reason ? `: ${slot.reason}` : ""}${slot.exitCode !== undefined ? ` (exit ${slot.exitCode}${slot.signal ? `, signal ${slot.signal}` : ""})` : ""}`
+          : "Unknown";
+
+  return createPortal(
+    <div
+      ref={cardRef}
+      role="tooltip"
+      className="fixed z-[2000] rounded-md border border-line bg-bg-soft shadow-[0_6px_22px_rgba(0,0,0,0.45)] text-xs text-fg"
+      style={{ left: pos.left, top: pos.top, width: 560, maxWidth: "calc(100vw - 16px)" }}
+      onMouseEnter={onPointerEnter}
+      onMouseLeave={onPointerLeave}
+    >
+      <div className="px-3 py-2 border-b border-line/60 flex items-center gap-2 min-w-0">
+        <span
+          className="inline-block h-2.5 w-2.5 rounded-[2px] shrink-0"
+          style={{ backgroundColor: squareFill(slot.statusKind) }}
+        />
+        <div className="min-w-0 flex-1 overflow-x-auto kv-scroll">
+          <span className="font-mono text-[12px] whitespace-nowrap">{slot.name}</span>
+        </div>
+        {kindBadge}
+        <span className={clsx("text-[11px] shrink-0", statusToneClass)}>{slot.statusLabel}</span>
+      </div>
+      <div className="px-3 py-2 space-y-1">
+        <KvRow k="State" v={<span className={statusToneClass}>{stateDescription}</span>} />
+        {slot.message && <KvRow k="Message" v={<span className="text-fg-soft break-words">{slot.message}</span>} />}
+        {slot.image && (
+          <KvRow k="Image" v={
+            <div className="overflow-x-auto kv-scroll"><span className="font-mono text-[11px] whitespace-nowrap">{slot.image}</span></div>
+          } />
+        )}
+        {slot.startedAt && <KvRow k="Started" v={<span className="font-mono text-[11px]">{slot.startedAt}</span>} />}
+        {slot.finishedAt && <KvRow k="Finished" v={<span className="font-mono text-[11px]">{slot.finishedAt}</span>} />}
+        {slot.restartCount > 0 && (
+          <KvRow
+            k="Restarts"
+            v={<span className={clsx("font-mono text-[11px]", slot.restartCount > 5 ? "text-bad" : "text-warn")}>{slot.restartCount}</span>}
+          />
+        )}
+        {slot.lastReason && (
+          <KvRow
+            k="Last exit"
+            v={
+              <span className="text-fg-soft text-[11px]">
+                {slot.lastReason}
+                {slot.lastExitCode !== undefined ? ` (exit ${slot.lastExitCode})` : ""}
+                {slot.lastFinishedAt ? ` · ${slot.lastFinishedAt}` : ""}
+              </span>
+            }
+          />
+        )}
+        {slot.containerID && (
+          <KvRow k="ID" v={
+            <div className="overflow-x-auto kv-scroll"><span className="font-mono text-[10px] whitespace-nowrap text-fg-mute">{slot.containerID}</span></div>
+          } />
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function KvRow({ k, v }: { k: string; v: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[80px_1fr] gap-2 items-start">
+      <span className="text-[10px] uppercase tracking-wider text-fg-mute pt-px">{k}</span>
+      <div className="min-w-0">{v}</div>
+    </div>
+  );
 }
 
 function controllerFor(it: Item) {
@@ -649,25 +957,9 @@ const podColumns: Column[] = [
     sortValue: (it) => podMetricSortValue(it, "memory"),
   },
   {
-    key: "containers", label: "Containers", width: "120px",
-    render: (it) => {
-      const cs = podContainers(it);
-      const ready = cs.filter((c: any) => c.ready).length;
-      if (cs.length === 0) return <span className="text-fg-mute">-</span>;
-      return (
-        <div className="flex items-center gap-1" title={`${ready}/${cs.length} containers ready`}>
-          {cs.map((c: any) => (
-            <span
-              key={c.name}
-              className="h-2 w-2 rounded-sm border border-line"
-              style={{ backgroundColor: c.ready ? "rgb(var(--ok))" : "rgb(var(--fg-mute) / 0.55)" }}
-            />
-          ))}
-          <span className="ml-1 font-mono text-[11px] text-fg-mute">{ready}/{cs.length}</span>
-        </div>
-      );
-    },
-    sortValue: (it) => podContainers(it).filter((c: any) => c.ready).length,
+    key: "containers", label: "Containers", width: "180px",
+    render: (it) => <ContainerSquaresCell pod={it} />,
+    sortValue: (it) => podContainerSlots(it).filter((s) => s.kind === "main" && s.ready).length,
   },
   {
     key: "restarts", label: "Restarts", width: "90px", align: "right",

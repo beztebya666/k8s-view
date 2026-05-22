@@ -132,7 +132,9 @@ const JSON_COLOR = {
 
 // Recursively emit a 2-space-indented, colour-tokenised JSON tree. Output
 // is plain text + <span> colour, rendered inside the row's pre context so
-// newlines/indentation render literally.
+// newlines/indentation render literally. String values that are themselves
+// a JSON object/array (the "stringified payload" pattern) get expanded
+// inline too — see the string branch below.
 function renderJson(value: unknown, indent: number, out: React.ReactNode[], keySeq: { n: number }): void {
   const pad = "  ".repeat(indent);
   const padIn = "  ".repeat(indent + 1);
@@ -163,6 +165,18 @@ function renderJson(value: unknown, indent: number, out: React.ReactNode[], keyS
     });
     out.push(pad, punct("}"));
     return;
+  }
+  // A string value that is *itself* a JSON object/array — the classic
+  // "stringified payload" in Java/Spring structured logs. Expand it inline
+  // so the embedded structure becomes real indented fields instead of one
+  // unreadable escaped blob. Depth-capped so a stringified chain can't
+  // recurse without bound.
+  if (typeof value === "string" && indent < 8) {
+    const embedded = parseJsonBody(value);
+    if (embedded !== undefined) {
+      renderJson(embedded, indent, out, keySeq);
+      return;
+    }
   }
   out.push(<span key={`v${keySeq.n++}`} style={{ color: scalarColor(value) }}>{scalarText(value)}</span>);
 }
