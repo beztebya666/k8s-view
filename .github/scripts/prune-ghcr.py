@@ -79,15 +79,19 @@ def registry_token():
 
 def child_digests(reg_tok, digest):
     """Child manifest digests of a manifest-list / OCI index (empty for a
-    plain single-arch image manifest)."""
-    try:
-        data, _ = _req("GET", f"{REG}/v2/{OWNER}/{PACKAGE}/manifests/{digest}",
-                        {"Authorization": f"Bearer {reg_tok}",
-                         "Accept": MANIFEST_ACCEPT,
-                         "User-Agent": "kv-ghcr-prune"})
-    except urllib.error.HTTPError as e:
-        print(f"  warn: manifest {digest[:19]} unreadable (HTTP {e.code})")
-        return []
+    plain single-arch image manifest).
+
+    A read failure here is deliberately NOT swallowed. This runs on
+    *tagged* manifests; if the GET fails (rate-limit, 5xx, transient auth)
+    and we returned [], that tag's real per-arch children would drop out
+    of the keep-set and the prune loop would delete live release layers —
+    which is exactly how a release's amd64/arm64 manifests once got eaten.
+    The exception propagates to main(), which then refuses to prune at
+    all: a skipped cleanup is always cheaper than a destroyed release."""
+    data, _ = _req("GET", f"{REG}/v2/{OWNER}/{PACKAGE}/manifests/{digest}",
+                    {"Authorization": f"Bearer {reg_tok}",
+                     "Accept": MANIFEST_ACCEPT,
+                     "User-Agent": "kv-ghcr-prune"})
     return [m["digest"] for m in data.get("manifests", []) if m.get("digest")]
 
 
