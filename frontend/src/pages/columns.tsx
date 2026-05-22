@@ -440,8 +440,8 @@ function restartCount(it: Item) {
 
 // ── Containers cell ───────────────────────────────────────────────────────
 //
-// One square per spec'd container — init first (dimmed + dashed border so
-// they're visually distinct from the steady-state main ones), then main,
+// One square per spec'd container — init first (dimmed so they read as
+// transient/secondary next to the steady-state main ones), then main,
 // then ephemeral. The "X/Y" counter on the right intentionally counts
 // *main* containers only, matching `kubectl get pod`'s READY column.
 //
@@ -505,10 +505,11 @@ function ContainerSquare({ slot }: { slot: ContainerSlot }) {
         onMouseEnter={startOpen}
         onMouseLeave={startClose}
         className={clsx(
-          "inline-block h-2.5 w-2.5 rounded-[2px] shrink-0",
-          slot.kind === "init"
-            ? "border border-dashed border-line/80 opacity-80"
-            : "border border-line",
+          // No dashed border: on a 10px box the fixed-length dashes never
+          // divide evenly and the rounded corners chew them up — it just
+          // looks ragged. Init reads as secondary purely via dimming.
+          "inline-block h-2.5 w-2.5 rounded-[2px] shrink-0 border border-line",
+          slot.kind === "init" && "opacity-60",
         )}
         style={{ backgroundColor: squareFill(slot.statusKind) }}
         aria-label={`${slot.kind === "init" ? "Init container" : slot.kind === "ephemeral" ? "Ephemeral container" : "Container"} ${slot.name}: ${slot.statusLabel}`}
