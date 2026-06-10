@@ -87,7 +87,7 @@ export function buildSeed() {
       { name: "prod-eu", context: "prod-eu", connected: true, reachable: true, current: true, version: "v1.29.4", nodes: 3, source: "kubeconfig" },
       { name: "prod-us", context: "prod-us", connected: true, reachable: true, current: false, version: "v1.29.2", nodes: 5, source: "kubeconfig" },
       { name: "staging", context: "staging", connected: true, reachable: true, current: false, version: "v1.30.1", nodes: 2, source: "kubeconfig" },
-      { name: "dev-laptop", context: "kind-dev", connected: false, reachable: false, current: false, version: "v1.29.0", nodes: 1, source: "kubeconfig" },
+      { name: "dev-laptop", context: "kind-dev", connected: true, reachable: true, current: false, version: "v1.29.0", nodes: 1, source: "kubeconfig" },
     ],
     resources: R,
     nodeMetrics: { "node-1": { cpu: 2400, cpuPct: 31, memory: 11 * 1024 ** 3, memPct: 34 }, "node-2": { cpu: 1800, cpuPct: 23, memory: 9 * 1024 ** 3, memPct: 28 }, "node-3": { cpu: 3100, cpuPct: 40, memory: 14 * 1024 ** 3, memPct: 44 } },
