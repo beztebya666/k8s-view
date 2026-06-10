@@ -1,10 +1,16 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, HashRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { ModalsProvider } from "./components/Modals";
+import { isDemo, installDemo } from "./lib/demo";
+import { DemoBanner } from "./components/DemoBanner";
 import "./styles.css";
+
+// Demo build: swap in the in-browser mock backend before anything fetches.
+if (isDemo()) installDemo();
+const Router = isDemo() ? HashRouter : BrowserRouter;
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -83,13 +89,14 @@ class AppErrorBoundary extends React.Component<
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={qc}>
-      <BrowserRouter>
+      <Router>
         <ModalsProvider>
           <AppErrorBoundary>
             <App />
           </AppErrorBoundary>
+          {isDemo() && <DemoBanner />}
         </ModalsProvider>
-      </BrowserRouter>
+      </Router>
     </QueryClientProvider>
   </React.StrictMode>,
 );

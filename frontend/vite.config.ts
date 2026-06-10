@@ -5,6 +5,7 @@ import path from "path";
 const apiTarget = process.env.K8SVIEW_API ?? "http://localhost:8080";
 
 export default defineConfig({
+  base: process.env.VITE_BASE || "/",
   plugins: [react()],
   resolve: {
     alias: {
