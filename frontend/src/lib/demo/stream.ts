@@ -6,6 +6,21 @@ import { getDB } from "./db";
 
 type Cb = ((ev: any) => void) | null;
 
+// The frontend subscribes with varied gvr strings ("/v1/Pod", "apps/v1/Deployment",
+// "/v1/pods", …). Normalise the LAST segment to the plain plural resource key.
+const KIND2RES: Record<string, string> = {
+  pod: "pods", deployment: "deployments", replicaset: "replicasets", statefulset: "statefulsets",
+  daemonset: "daemonsets", service: "services", node: "nodes", namespace: "namespaces",
+  configmap: "configmaps", secret: "secrets", event: "events", job: "jobs", cronjob: "cronjobs",
+  ingress: "ingresses", persistentvolumeclaim: "persistentvolumeclaims", pvc: "persistentvolumeclaims",
+  replicationcontroller: "replicationcontrollers",
+};
+export function resourceOf(gvr: string): string {
+  const last = (gvr.split("/").pop() || "").toLowerCase();
+  if (KIND2RES[last]) return KIND2RES[last];
+  return last.endsWith("s") ? last : last + "s";
+}
+
 const LOG_LINES = [
   "[INFO] starting application v1.4.2 (commit a1b2c3d)",
   "[INFO] connected to postgres://postgres:5432/app",
@@ -48,7 +63,7 @@ export class DemoWebSocket {
     if (msg.op === "ping") { this.emit(JSON.stringify({ kind: "pong", sid: msg.sid })); return; }
     if (msg.op === "subscribe") {
       const gvr: string = msg.gvr; const ns: string = msg.ns || "";
-      let list = (getDB() as any).resources[gvr] || [];
+      let list = (getDB() as any).resources[resourceOf(gvr)] || [];
       if (ns) list = list.filter((it: any) => it.metadata?.namespace === ns);
       this.timers.push(window.setTimeout(() => this.emit(JSON.stringify({ sid: msg.sid, kind: "snapshot", gvr, list })), 60));
     }

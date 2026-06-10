@@ -3,6 +3,7 @@
 // covers clusters, namespaces, api-resources, metrics, get/apply/delete + actions.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { getDB, saveDB } from "./db";
+import { resourceOf } from "./stream";
 
 const realFetch = window.fetch.bind(window);
 const db = () => getDB() as any;
@@ -35,13 +36,13 @@ on(/^\/api\/v1\/clusters\/([^/]+)\/disconnect$/, "POST", (m) => { const c = db()
 on(/^\/api\/v1\/clusters\/([^/]+)$/, "DELETE", (m) => { const d = db(); d.clusters = d.clusters.filter((x: any) => x.name !== decodeURIComponent(m[1])); saveDB(); return { removed: decodeURIComponent(m[1]) }; });
 on(/^\/api\/v1\/([^/]+)\/version$/, "GET", () => ({ gitVersion: "v1.29.4", gitCommit: "demo", platform: "linux/amd64" }));
 on(/^\/api\/v1\/([^/]+)\/api-resources$/, "GET", () => API_RESOURCES);
-on(/^\/api\/v1\/([^/]+)\/namespaces$/, "GET", () => db().resources["core/v1/namespaces"].map((n: any) => n.metadata.name));
+on(/^\/api\/v1\/([^/]+)\/namespaces$/, "GET", () => db().resources["namespaces"].map((n: any) => n.metadata.name));
 on(/^\/api\/v1\/([^/]+)\/metrics\/nodes$/, "GET", () => db().nodeMetrics);
 on(/^\/api\/v1\/([^/]+)\/metrics\/pods(\/.*)?$/, "GET", () => podMetrics());
 // resource get: /resource/{group}/{version}/{resource}[/ns/{ns}]/{name}
 on(/^\/api\/v1\/([^/]+)\/resource\/([^/]+)\/([^/]+)\/([^/]+)(?:\/ns\/([^/]+))?\/([^/]+)$/, "GET", (m) => {
   const gvr = `${m[2]}/${m[3]}/${m[4]}`; const name = decodeURIComponent(m[6]);
-  const found = (db().resources[gvr] || []).find((x: any) => x.metadata.name === name);
+  const found = (db().resources[resourceOf(gvr)] || []).find((x: any) => x.metadata.name === name);
   return found || { __status: 404 };
 });
 on(/^\/api\/v1\/([^/]+)\/resource\/.+$/, "PUT", (_m, _q, body) => { try { return JSON.parse(body); } catch { return { ok: true }; } });
@@ -53,7 +54,7 @@ on(/^\/api\/v1\/([^/]+)\/.*\/portforward.*$/, "POST", () => ({ ok: true, port: 3
 
 function podMetrics() {
   const out: Record<string, any> = {};
-  for (const p of db().resources["core/v1/pods"]) out[`${p.metadata.namespace}/${p.metadata.name}`] = { cpu: Math.round(20 + Math.random() * 180), memory: Math.round((40 + Math.random() * 220) * 1024 * 1024) };
+  for (const p of db().resources["pods"]) out[`${p.metadata.namespace}/${p.metadata.name}`] = { cpu: Math.round(20 + Math.random() * 180), memory: Math.round((40 + Math.random() * 220) * 1024 * 1024) };
   return out;
 }
 
